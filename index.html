@@ -253,13 +253,6 @@ function Field({ label, children }) {
   );
 }
 
-const AREAS = [
-  { n: '1', t: 'Conflictos societarios', d: 'Cuando la relación entre socios empieza a filtrarse en las decisiones del negocio, y las reuniones de directorio se parecen cada vez más a una discusión familiar.' },
-  { n: '2', t: 'Padres, hijos y sucesión', d: 'El pasaje de mando entre generaciones no es solo un tema patrimonial: reactiva roles, jerarquías y heridas que vienen de mucho antes de la empresa.' },
-  { n: '3', t: 'Comunicación en el directorio', d: 'Espacios de trabajo donde lo que no se dice en la mesa familiar tampoco se dice en la mesa directiva, y las decisiones se vuelven más lentas y más costosas.' },
-  { n: '4', t: 'Socios no familiares', d: 'Acompañamiento para quienes se suman a una empresa de familia desde afuera y necesitan entender —y a veces mediar— una dinámica que no es solo profesional.' },
-];
-
 function Landing() {
   const [cfg, setCfg] = useState(null);
 
@@ -270,6 +263,12 @@ function Landing() {
   if (!cfg) return null;
 
   const wrap = { maxWidth: 1140, margin: '0 auto', padding: '0 24px' };
+  const areas = [
+    { n: '1', t: cfg.area1_titulo, d: cfg.area1_texto },
+    { n: '2', t: cfg.area2_titulo, d: cfg.area2_texto },
+    { n: '3', t: cfg.area3_titulo, d: cfg.area3_texto },
+    { n: '4', t: cfg.area4_titulo, d: cfg.area4_texto },
+  ];
 
   return (
     <div style={{ background: cfg.color_fondo }}>
@@ -316,22 +315,18 @@ function Landing() {
         <GenogramRule label="Para quién" />
 
         <section style={{ maxWidth: 640 }}>
-          <h2 className="display" style={{ fontStyle: 'italic', fontSize: 28 }}>Empresas donde el organigrama y el árbol familiar se superponen.</h2>
-          <p style={{ marginTop: 20, color: 'var(--ink-soft)', lineHeight: 1.7 }}>
-            Trabajo con directorios, sociedades entre hermanos o primos, fundadores que empiezan a delegar y segundas o terceras
-            generaciones que entran a la empresa con una historia previa al primer día de trabajo. No reemplazo al asesoramiento
-            legal o contable de la sociedad: trabajo en paralelo, sobre lo que esos procesos no pueden resolver por sí solos.
-          </p>
+          <h2 className="display" style={{ fontStyle: 'italic', fontSize: 28 }}>{cfg.para_quien_titulo}</h2>
+          <p style={{ marginTop: 20, color: 'var(--ink-soft)', lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>{cfg.para_quien_texto}</p>
         </section>
 
         <GenogramRule label="Áreas de trabajo" />
 
         <section style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '40px 48px' }}>
-          {AREAS.map((a) => (
+          {areas.map((a) => (
             <div key={a.n} style={{ borderTop: '1px solid var(--line)', paddingTop: 20 }}>
               <span className="mono" style={{ fontSize: 12, color: 'var(--secundario)' }}>{a.n}</span>
               <h3 className="display" style={{ fontSize: 20, marginTop: 8, fontWeight: 500 }}>{a.t}</h3>
-              <p style={{ marginTop: 12, fontSize: 14, color: 'var(--ink-soft)', lineHeight: 1.6 }}>{a.d}</p>
+              <p style={{ marginTop: 12, fontSize: 14, color: 'var(--ink-soft)', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{a.d}</p>
             </div>
           ))}
         </section>
@@ -348,15 +343,8 @@ function Landing() {
           </div>
           <div>
             <h2 className="display" style={{ fontStyle: 'italic', fontSize: 26 }}>{cfg.nombre_marca}</h2>
-            <p style={{ marginTop: 16, color: 'var(--ink-soft)', lineHeight: 1.7, maxWidth: 540 }}>
-              Licenciada en Psicología (Universidad Favaloro), especializada en la intersección entre los vínculos familiares
-              y la vida de la empresa. Mi formación clínica se apoya en herramientas de la psicología vincular y sistémica,
-              aplicadas al contexto específico de la empresa familiar argentina.
-            </p>
-            <p style={{ marginTop: 16, color: 'var(--ink-soft)', lineHeight: 1.7, maxWidth: 540 }}>
-              Trabajo bajo secreto profesional, con sesiones individuales, vinculares (entre socios o entre miembros de la
-              familia) y procesos de acompañamiento sostenidos con el directorio.
-            </p>
+            <p style={{ marginTop: 16, color: 'var(--ink-soft)', lineHeight: 1.7, maxWidth: 540, whiteSpace: 'pre-wrap' }}>{cfg.sobre_mi_texto1}</p>
+            <p style={{ marginTop: 16, color: 'var(--ink-soft)', lineHeight: 1.7, maxWidth: 540, whiteSpace: 'pre-wrap' }}>{cfg.sobre_mi_texto2}</p>
           </div>
         </section>
 
@@ -1190,31 +1178,41 @@ function TabDiseno() {
   const [ok, setOk] = useState(false);
   const { btn, inputStyle } = React.useContext(PanelStyleContext);
 
+  const [error, setError] = useState('');
+
   useEffect(() => {
     api('/api/operaciones').then((d) => {
       setCfg({ ...d.config, foto_url: d.foto_url, logo_url: d.logo_url });
       setPerfil({ ...d.perfil, especialidades: (d.perfil?.especialidades || []).join(', '), cv_url: d.cv_url });
-    });
+    }).catch((err) => setError(err.message || 'No se pudo cargar Diseño'));
   }, []);
 
   async function guardar() {
     setSaving(true);
     setOk(false);
-    const body = { config: { ...cfg }, perfil: { ...perfil } };
-    delete body.config.foto_url; delete body.config.logo_url;
-    delete body.perfil.cv_url;
-    if (fotoFile) body.foto = { dataBase64: await fileToBase64(fotoFile), contentType: fotoFile.type };
-    if (logoFile) body.logo = { dataBase64: await fileToBase64(logoFile), contentType: logoFile.type };
-    if (cvFile) body.cv = { dataBase64: await fileToBase64(cvFile), contentType: cvFile.type };
-    await api('/api/operaciones', { method: 'POST', body });
-    const d = await api('/api/operaciones');
-    setCfg({ ...d.config, foto_url: d.foto_url, logo_url: d.logo_url });
-    setPerfil({ ...d.perfil, especialidades: (d.perfil?.especialidades || []).join(', '), cv_url: d.cv_url });
-    setFotoFile(null); setLogoFile(null); setCvFile(null);
-    setOk(true);
+    setError('');
+    try {
+      const body = { config: { ...cfg }, perfil: { ...perfil } };
+      delete body.config.foto_url; delete body.config.logo_url;
+      delete body.perfil.cv_url;
+      if (fotoFile) body.foto = { dataBase64: await fileToBase64(fotoFile), contentType: fotoFile.type };
+      if (logoFile) body.logo = { dataBase64: await fileToBase64(logoFile), contentType: logoFile.type };
+      if (cvFile) body.cv = { dataBase64: await fileToBase64(cvFile), contentType: cvFile.type };
+      await api('/api/operaciones', { method: 'POST', body });
+      const d = await api('/api/operaciones');
+      setCfg({ ...d.config, foto_url: d.foto_url, logo_url: d.logo_url });
+      setPerfil({ ...d.perfil, especialidades: (d.perfil?.especialidades || []).join(', '), cv_url: d.cv_url });
+      setFotoFile(null); setLogoFile(null); setCvFile(null);
+      setOk(true);
+    } catch (err) {
+      setError(err.message || 'No se pudo guardar');
+    }
     setSaving(false);
   }
 
+  if (error && (!cfg || !perfil)) {
+    return <p style={{ color: '#B3261E', fontSize: 14 }}>{error}</p>;
+  }
   if (!cfg || !perfil) return <p style={{ color: 'var(--ink-soft)', fontSize: 14 }}>Cargando…</p>;
 
   const box = { border: '1px solid var(--line)', background: 'white', borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', flexShrink: 0 };
@@ -1255,6 +1253,32 @@ function TabDiseno() {
         </div>
       </Section>
 
+      <Section title='Sección "Para quién"'>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <Field label="Título"><textarea rows={2} style={{ ...inputStyle, width: '100%', resize: 'none' }} value={cfg.para_quien_titulo || ''} onChange={(e) => setCfg((c) => ({ ...c, para_quien_titulo: e.target.value }))} /></Field>
+          <Field label="Texto"><textarea rows={4} style={{ ...inputStyle, width: '100%', resize: 'none' }} value={cfg.para_quien_texto || ''} onChange={(e) => setCfg((c) => ({ ...c, para_quien_texto: e.target.value }))} /></Field>
+        </div>
+      </Section>
+
+      <Section title="Las 4 áreas de trabajo">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+          {[1, 2, 3, 4].map((n) => (
+            <div key={n} style={{ borderTop: '1px solid var(--line)', paddingTop: 14 }}>
+              <p className="mono" style={{ fontSize: 10, color: 'var(--secundario)', marginBottom: 8 }}>ÁREA {n}</p>
+              <Field label="Título"><input style={{ ...inputStyle, width: '100%', marginBottom: 10 }} value={cfg[`area${n}_titulo`] || ''} onChange={(e) => setCfg((c) => ({ ...c, [`area${n}_titulo`]: e.target.value }))} /></Field>
+              <Field label="Texto"><textarea rows={3} style={{ ...inputStyle, width: '100%', resize: 'none' }} value={cfg[`area${n}_texto`] || ''} onChange={(e) => setCfg((c) => ({ ...c, [`area${n}_texto`]: e.target.value }))} /></Field>
+            </div>
+          ))}
+        </div>
+      </Section>
+
+      <Section title='Sección "Sobre mí"'>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <Field label="Primer párrafo"><textarea rows={4} style={{ ...inputStyle, width: '100%', resize: 'none' }} value={cfg.sobre_mi_texto1 || ''} onChange={(e) => setCfg((c) => ({ ...c, sobre_mi_texto1: e.target.value }))} /></Field>
+          <Field label="Segundo párrafo"><textarea rows={3} style={{ ...inputStyle, width: '100%', resize: 'none' }} value={cfg.sobre_mi_texto2 || ''} onChange={(e) => setCfg((c) => ({ ...c, sobre_mi_texto2: e.target.value }))} /></Field>
+        </div>
+      </Section>
+
       <Section title="Perfil profesional (para los mails)">
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
           <Field label="Título"><input style={{ ...inputStyle, width: '100%' }} value={perfil.titulo || ''} onChange={(e) => setPerfil((p) => ({ ...p, titulo: e.target.value }))} /></Field>
@@ -1271,9 +1295,10 @@ function TabDiseno() {
         </Field>
       </Section>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
         <button onClick={guardar} disabled={saving} style={btn}>{saving ? 'Guardando…' : 'Guardar cambios'}</button>
         {ok && <p style={{ fontSize: 14, color: 'var(--secundario)' }}>Guardado. Ya se ve en el sitio.</p>}
+        {error && <p style={{ fontSize: 14, color: '#B3261E' }}>{error}</p>}
       </div>
     </div>
   );
