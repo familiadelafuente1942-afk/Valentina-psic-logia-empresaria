@@ -1176,6 +1176,8 @@ function TabDiseno() {
   const [fotoFile, setFotoFile] = useState(null);
   const [logoFile, setLogoFile] = useState(null);
   const [cvFile, setCvFile] = useState(null);
+  const [fotoPreview, setFotoPreview] = useState(null);
+  const [logoPreview, setLogoPreview] = useState(null);
   const [saving, setSaving] = useState(false);
   const [ok, setOk] = useState(false);
   const { btn, inputStyle } = React.useContext(PanelStyleContext);
@@ -1184,10 +1186,26 @@ function TabDiseno() {
 
   useEffect(() => {
     api('/api/operaciones').then((d) => {
-      setCfg({ ...d.config, foto_url: d.foto_url, logo_url: d.logo_url });
+      setCfg({ ...d.config, foto_url: cacheBust(d.foto_url), logo_url: cacheBust(d.logo_url) });
       setPerfil({ ...d.perfil, especialidades: (d.perfil?.especialidades || []).join(', '), cv_url: d.cv_url });
     }).catch((err) => setError(err.message || 'No se pudo cargar Diseño'));
   }, []);
+
+  function cacheBust(url) {
+    if (!url) return url;
+    return `${url}${url.includes('?') ? '&' : '?'}v=${Date.now()}`;
+  }
+
+  function elegirFoto(e) {
+    const f = e.target.files[0] || null;
+    setFotoFile(f);
+    setFotoPreview(f ? URL.createObjectURL(f) : null);
+  }
+  function elegirLogo(e) {
+    const f = e.target.files[0] || null;
+    setLogoFile(f);
+    setLogoPreview(f ? URL.createObjectURL(f) : null);
+  }
 
   async function guardar() {
     setSaving(true);
@@ -1202,9 +1220,12 @@ function TabDiseno() {
       if (cvFile) body.cv = { dataBase64: await fileToBase64(cvFile), contentType: cvFile.type };
       await api('/api/operaciones', { method: 'POST', body });
       const d = await api('/api/operaciones');
-      setCfg({ ...d.config, foto_url: d.foto_url, logo_url: d.logo_url });
+      setCfg({ ...d.config, foto_url: cacheBust(d.foto_url), logo_url: cacheBust(d.logo_url) });
       setPerfil({ ...d.perfil, especialidades: (d.perfil?.especialidades || []).join(', '), cv_url: d.cv_url });
+      if (fotoFile && !d.foto_url) setError('La foto se subió pero el link público no se generó — revisá que el bucket "sitio" exista y sea público.');
+      else if (logoFile && !d.logo_url) setError('El logo se subió pero el link público no se generó — revisá que el bucket "sitio" exista y sea público.');
       setFotoFile(null); setLogoFile(null); setCvFile(null);
+      setFotoPreview(null); setLogoPreview(null);
       setOk(true);
     } catch (err) {
       setError(err.message || 'No se pudo guardar');
@@ -1226,15 +1247,15 @@ function TabDiseno() {
 
       <Section title="Logo (opcional)">
         <div style={{ display: 'flex', alignItems: 'center', gap: 20 }}>
-          <div style={{ ...box, width: 96, height: 96 }}>{cfg.logo_url ? <img src={cfg.logo_url} style={{ width: '100%', height: '100%', objectFit: 'contain', padding: 8 }} /> : <span className="mono" style={{ fontSize: 9, color: 'var(--ink-soft)' }}>SIN LOGO</span>}</div>
-          <input type="file" accept="image/*" onChange={(e) => setLogoFile(e.target.files[0] || null)} />
+          <div style={{ ...box, width: 96, height: 96 }}>{(logoPreview || cfg.logo_url) ? <img src={logoPreview || cfg.logo_url} style={{ width: '100%', height: '100%', objectFit: 'contain', padding: 8 }} /> : <span className="mono" style={{ fontSize: 9, color: 'var(--ink-soft)' }}>SIN LOGO</span>}</div>
+          <input type="file" accept="image/*" onChange={elegirLogo} />
         </div>
       </Section>
 
       <Section title="Foto de portada">
         <div style={{ display: 'flex', alignItems: 'center', gap: 20 }}>
-          <div style={{ ...box, width: 96, height: 112 }}>{cfg.foto_url ? <img src={cfg.foto_url} style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <span className="mono" style={{ fontSize: 9, color: 'var(--ink-soft)' }}>SIN FOTO</span>}</div>
-          <input type="file" accept="image/*" onChange={(e) => setFotoFile(e.target.files[0] || null)} />
+          <div style={{ ...box, width: 96, height: 112 }}>{(fotoPreview || cfg.foto_url) ? <img src={fotoPreview || cfg.foto_url} style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <span className="mono" style={{ fontSize: 9, color: 'var(--ink-soft)' }}>SIN FOTO</span>}</div>
+          <input type="file" accept="image/*" onChange={elegirFoto} />
         </div>
       </Section>
 
