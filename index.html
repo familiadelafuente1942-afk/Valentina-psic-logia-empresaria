@@ -1218,7 +1218,9 @@ function TabDiseno() {
       if (fotoFile) body.foto = { dataBase64: await fileToBase64(fotoFile), contentType: fotoFile.type };
       if (logoFile) body.logo = { dataBase64: await fileToBase64(logoFile), contentType: logoFile.type };
       if (cvFile) body.cv = { dataBase64: await fileToBase64(cvFile), contentType: cvFile.type };
-      await api('/api/operaciones', { method: 'POST', body });
+      await api('/api/operaciones', { method: 'POST', body }).then((r) => {
+        if (r.avisos?.length) setError(r.avisos.join(' · '));
+      });
       const d = await api('/api/operaciones');
       setCfg({ ...d.config, foto_url: cacheBust(d.foto_url), logo_url: cacheBust(d.logo_url) });
       setPerfil({ ...d.perfil, especialidades: (d.perfil?.especialidades || []).join(', '), cv_url: d.cv_url });
