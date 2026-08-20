@@ -1,0 +1,1262 @@
+<!DOCTYPE html>
+<html lang="es-AR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Valentina De la Fuente — Psicóloga especializada en empresas familiares</title>
+<meta name="description" content="Acompañamiento psicológico para conflictos societarios y familiares dentro de la empresa: socios, padres e hijos, sucesión y comunicación en el directorio.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,wght@0,400;0,500;0,600;1,400;1,500;1,600&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+  :root {
+    --ink: #241F26;
+    --ink-soft: #5B5560;
+    --paper: #FBF7F2;
+    --acento: #C97D63;
+    --secundario: #8FA086;
+    --line: #E6DFD5;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--paper); color: var(--ink); font-family: 'Inter', sans-serif; -webkit-font-smoothing: antialiased; }
+  .display { font-family: 'Fraunces', serif; }
+  .mono { font-family: 'IBM Plex Mono', monospace; }
+  a { color: inherit; }
+  input, textarea, select, button { font-family: inherit; }
+  ::placeholder { color: #9c9498; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useCallback, useRef } = React;
+
+// ---------------------------------------------------------------------
+// Conexión a Supabase Auth (login real con mail/contraseña).
+// La SUPA_ANON_KEY es pública a propósito (es la "publishable key" de
+// Supabase, protegida por Row Level Security del lado del servidor) —
+// no es un secreto, se puede pegar acá tranquilo.
+// Completá estos dos valores después de crear el proyecto en Supabase
+// (Project Settings → API → Project URL / anon public key).
+// ---------------------------------------------------------------------
+const SUPA_URL = ""; // ej: "https://xxxxxxxx.supabase.co"
+const SUPA_ANON_KEY = ""; // la "anon public key" de Supabase (NO la service_role)
+
+// --- sesión con renovación automática ---
+function tokenGuardado() { try { return localStorage.getItem('vv_token'); } catch { return null; } }
+function refreshGuardado() { try { return localStorage.getItem('vv_refresh'); } catch { return null; } }
+function guardarToken(t, r) {
+  try {
+    localStorage.setItem('vv_token', (t || '').trim());
+    if (r) localStorage.setItem('vv_refresh', (r || '').trim());
+  } catch {}
+}
+function cerrarSesion() {
+  try { localStorage.removeItem('vv_token'); localStorage.removeItem('vv_refresh'); } catch {}
+}
+async function renovarSesion() {
+  const refresh = refreshGuardado();
+  if (!refresh) return null;
+  try {
+    const r = await fetch(`${SUPA_URL}/auth/v1/token?grant_type=refresh_token`, {
+      method: 'POST',
+      headers: { apikey: SUPA_ANON_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refresh_token: refresh }),
+    });
+    const d = await r.json();
+    if (!r.ok) return null;
+    guardarToken(d.access_token, d.refresh_token);
+    return d.access_token;
+  } catch { return null; }
+}
+async function iniciarSesionConCredenciales(email, clave) {
+  const r = await fetch(`${SUPA_URL}/auth/v1/token?grant_type=password`, {
+    method: 'POST',
+    headers: { apikey: SUPA_ANON_KEY, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password: clave }),
+  });
+  const d = await r.json();
+  if (!r.ok) throw new Error(d.error_description || d.msg || 'No se pudo iniciar sesión');
+  guardarToken(d.access_token, d.refresh_token);
+  return d.access_token;
+}
+async function pedirRecuperarClave(email) {
+  const r = await fetch(`${SUPA_URL}/auth/v1/recover`, {
+    method: 'POST',
+    headers: { apikey: SUPA_ANON_KEY, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email }),
+  });
+  if (!r.ok) {
+    const d = await r.json().catch(() => ({}));
+    throw new Error(d.error_description || d.msg || 'No se pudo enviar el mail de recuperación');
+  }
+}
+
+// ---------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------
+async function api(path, opts = {}, _reintentado) {
+  const token = tokenGuardado();
+  const res = await fetch(path, {
+    method: opts.method || 'GET',
+    headers: {
+      ...(opts.body ? { 'Content-Type': 'application/json' } : {}),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: opts.body ? JSON.stringify(opts.body) : undefined,
+  });
+  if (res.status === 401 && !_reintentado) {
+    const renovado = await renovarSesion();
+    if (renovado) return api(path, opts, true);
+  }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw Object.assign(new Error(data.error || 'Error'), { status: res.status, data });
+  return data;
+}
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result.split(',')[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+function navigate(path) {
+  window.history.pushState({}, '', path);
+  window.dispatchEvent(new PopStateEvent('popstate'));
+}
+
+// ---------------------------------------------------------------------
+// Landing pública
+// ---------------------------------------------------------------------
+function GenogramRule({ label }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '80px 0' }}>
+      <span style={{ flex: 1, height: 1, background: 'var(--line)' }} />
+      {label && (
+        <span className="mono" style={{ fontSize: 11, letterSpacing: '0.16em', textTransform: 'uppercase', color: 'var(--acento)', whiteSpace: 'nowrap' }}>
+          {label}
+        </span>
+      )}
+      <span style={{ flex: 1, height: 1, background: 'var(--line)' }} />
+    </div>
+  );
+}
+
+function LeadForm() {
+  const [form, setForm] = useState({ nombre: '', email: '', telefono: '', empresa: '', situacion: 'Conflicto entre socios', mensaje: '' });
+  const [status, setStatus] = useState('idle');
+
+  function update(field) {
+    return (e) => setForm((f) => ({ ...f, [field]: e.target.value }));
+  }
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setStatus('sending');
+    try {
+      await api('/api/recibir-lead', { method: 'POST', body: form });
+      setStatus('sent');
+    } catch {
+      setStatus('error');
+    }
+  }
+
+  if (status === 'sent') {
+    return (
+      <div style={{ border: '1px solid var(--line)', background: 'rgba(255,255,255,0.6)', borderRadius: 20, padding: 32, textAlign: 'center' }}>
+        <p className="display" style={{ fontStyle: 'italic', fontSize: 20 }}>Mensaje recibido.</p>
+        <p style={{ marginTop: 8, fontSize: 14, color: 'var(--ink-soft)' }}>Valentina lee cada consulta personalmente y responde dentro de 48hs hábiles.</p>
+      </div>
+    );
+  }
+
+  const inputStyle = { border: '1px solid var(--line)', background: 'white', padding: '10px 14px', borderRadius: 10, fontSize: 14, width: '100%' };
+
+  return (
+    <form onSubmit={handleSubmit} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
+      <Field label="Nombre"><input required style={inputStyle} value={form.nombre} onChange={update('nombre')} /></Field>
+      <Field label="Empresa (opcional)"><input style={inputStyle} value={form.empresa} onChange={update('empresa')} /></Field>
+      <Field label="Email"><input type="email" required style={inputStyle} value={form.email} onChange={update('email')} /></Field>
+      <Field label="Teléfono"><input style={inputStyle} value={form.telefono} onChange={update('telefono')} /></Field>
+      <div style={{ gridColumn: '1 / -1' }}>
+        <Field label="La situación se parece más a">
+          <select style={inputStyle} value={form.situacion} onChange={update('situacion')}>
+            {['Conflicto entre socios', 'Padres e hijos en la empresa', 'Proceso de sucesión', 'Comunicación en el directorio', 'Otra situación'].map((s) => (
+              <option key={s} value={s}>{s}</option>
+            ))}
+          </select>
+        </Field>
+      </div>
+      <div style={{ gridColumn: '1 / -1' }}>
+        <Field label="Contame brevemente qué está pasando">
+          <textarea rows={4} style={{ ...inputStyle, resize: 'none' }} value={form.mensaje} onChange={update('mensaje')} />
+        </Field>
+      </div>
+      <div style={{ gridColumn: '1 / -1', display: 'flex', alignItems: 'center', gap: 16 }}>
+        <button type="submit" disabled={status === 'sending'} style={{ background: 'var(--acento)', color: 'var(--paper)', padding: '13px 28px', borderRadius: 999, border: 'none', fontSize: 14, cursor: 'pointer' }}>
+          {status === 'sending' ? 'Enviando…' : 'Enviar consulta'}
+        </button>
+        {status === 'error' && <p style={{ fontSize: 14, color: 'var(--acento)' }}>No se pudo enviar. Probá de nuevo.</p>}
+      </div>
+    </form>
+  );
+}
+
+function Field({ label, children }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <label style={{ fontSize: 12, color: 'var(--ink-soft)' }}>{label}</label>
+      {children}
+    </div>
+  );
+}
+
+const AREAS = [
+  { n: '1', t: 'Conflictos societarios', d: 'Cuando la relación entre socios empieza a filtrarse en las decisiones del negocio, y las reuniones de directorio se parecen cada vez más a una discusión familiar.' },
+  { n: '2', t: 'Padres, hijos y sucesión', d: 'El pasaje de mando entre generaciones no es solo un tema patrimonial: reactiva roles, jerarquías y heridas que vienen de mucho antes de la empresa.' },
+  { n: '3', t: 'Comunicación en el directorio', d: 'Espacios de trabajo donde lo que no se dice en la mesa familiar tampoco se dice en la mesa directiva, y las decisiones se vuelven más lentas y más costosas.' },
+  { n: '4', t: 'Socios no familiares', d: 'Acompañamiento para quienes se suman a una empresa de familia desde afuera y necesitan entender —y a veces mediar— una dinámica que no es solo profesional.' },
+];
+
+function Landing() {
+  const [cfg, setCfg] = useState(null);
+
+  useEffect(() => {
+    api('/api/config-publica').then(setCfg).catch(() => setCfg({}));
+  }, []);
+
+  if (!cfg) return null;
+
+  const wrap = { maxWidth: 1140, margin: '0 auto', padding: '0 24px' };
+
+  return (
+    <div style={{ background: cfg.color_fondo }}>
+      <style>{`:root{--acento:${cfg.color_acento};--secundario:${cfg.color_secundario};}`}</style>
+
+      <header style={{ position: 'sticky', top: 0, zIndex: 30, background: 'rgba(251,247,242,0.9)', backdropFilter: 'blur(6px)', borderBottom: '1px solid var(--line)' }}>
+        <div style={{ ...wrap, height: 64, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            {cfg.logo_url && <img src={cfg.logo_url} alt="" style={{ height: 32, width: 32, objectFit: 'contain' }} />}
+            <span className="display" style={{ fontStyle: 'italic', fontSize: 18 }}>{cfg.nombre_marca}</span>
+          </span>
+          <a href="#contacto" style={{ fontSize: 14, border: '1.5px solid var(--acento)', color: 'var(--acento)', padding: '8px 20px', borderRadius: 999, textDecoration: 'none', fontWeight: 500 }}>Escribime</a>
+        </div>
+      </header>
+
+      <main style={wrap}>
+        <section style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 48, alignItems: 'center', paddingTop: 80, paddingBottom: 32 }}>
+          <div>
+            <p className="mono" style={{ fontSize: 11, letterSpacing: '0.18em', textTransform: 'uppercase', color: 'var(--acento)', marginBottom: 20 }}>
+              Psicología aplicada a la empresa familiar
+            </p>
+            <h1 className="display" style={{ fontSize: 44, lineHeight: 1.1, fontWeight: 500, margin: 0 }}>{cfg.titulo_hero}</h1>
+            <p style={{ marginTop: 20, color: 'var(--ink-soft)', lineHeight: 1.7, maxWidth: 420 }}>{cfg.subtitulo_hero}</p>
+            <a href="#contacto" style={{ display: 'inline-block', marginTop: 28, background: 'var(--acento)', color: 'var(--paper)', padding: '14px 28px', borderRadius: 999, fontSize: 14, textDecoration: 'none' }}>
+              {cfg.cta_texto}
+            </a>
+          </div>
+          <div style={{ maxWidth: 380, margin: '0 auto', position: 'relative' }}>
+            {cfg.foto_url ? (
+              <>
+                <div style={{ aspectRatio: '4/5', overflow: 'hidden', borderRadius: 20, border: '1px solid var(--line)' }}>
+                  <img src={cfg.foto_url} alt={cfg.nombre_marca} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                </div>
+                <div style={{ position: 'absolute', bottom: -12, right: -12, width: 56, height: 56, borderRadius: 999, border: '1px solid var(--acento)' }} />
+              </>
+            ) : (
+              <OverlapDiagram />
+            )}
+          </div>
+        </section>
+
+        <GenogramRule label="Para quién" />
+
+        <section style={{ maxWidth: 640 }}>
+          <h2 className="display" style={{ fontStyle: 'italic', fontSize: 28 }}>Empresas donde el organigrama y el árbol familiar se superponen.</h2>
+          <p style={{ marginTop: 20, color: 'var(--ink-soft)', lineHeight: 1.7 }}>
+            Trabajo con directorios, sociedades entre hermanos o primos, fundadores que empiezan a delegar y segundas o terceras
+            generaciones que entran a la empresa con una historia previa al primer día de trabajo. No reemplazo al asesoramiento
+            legal o contable de la sociedad: trabajo en paralelo, sobre lo que esos procesos no pueden resolver por sí solos.
+          </p>
+        </section>
+
+        <GenogramRule label="Áreas de trabajo" />
+
+        <section style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '40px 48px' }}>
+          {AREAS.map((a) => (
+            <div key={a.n} style={{ borderTop: '1px solid var(--line)', paddingTop: 20 }}>
+              <span className="mono" style={{ fontSize: 12, color: 'var(--secundario)' }}>{a.n}</span>
+              <h3 className="display" style={{ fontSize: 20, marginTop: 8, fontWeight: 500 }}>{a.t}</h3>
+              <p style={{ marginTop: 12, fontSize: 14, color: 'var(--ink-soft)', lineHeight: 1.6 }}>{a.d}</p>
+            </div>
+          ))}
+        </section>
+
+        <GenogramRule label="Sobre mí" />
+
+        <section style={{ display: 'grid', gridTemplateColumns: '280px 1fr', gap: 40, alignItems: 'start' }}>
+          <div style={{ aspectRatio: '4/5', background: 'rgba(36,31,38,0.05)', border: '1px solid var(--line)', borderRadius: 20, overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            {cfg.foto_url ? (
+              <img src={cfg.foto_url} alt={cfg.nombre_marca} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+            ) : (
+              <span className="mono" style={{ fontSize: 11, color: 'var(--ink-soft)', letterSpacing: '0.1em' }}>FOTO</span>
+            )}
+          </div>
+          <div>
+            <h2 className="display" style={{ fontStyle: 'italic', fontSize: 26 }}>{cfg.nombre_marca}</h2>
+            <p style={{ marginTop: 16, color: 'var(--ink-soft)', lineHeight: 1.7, maxWidth: 540 }}>
+              Licenciada en Psicología (Universidad Favaloro), especializada en la intersección entre los vínculos familiares
+              y la vida de la empresa. Mi formación clínica se apoya en herramientas de la psicología vincular y sistémica,
+              aplicadas al contexto específico de la empresa familiar argentina.
+            </p>
+            <p style={{ marginTop: 16, color: 'var(--ink-soft)', lineHeight: 1.7, maxWidth: 540 }}>
+              Trabajo bajo secreto profesional, con sesiones individuales, vinculares (entre socios o entre miembros de la
+              familia) y procesos de acompañamiento sostenidos con el directorio.
+            </p>
+          </div>
+        </section>
+
+        <GenogramRule label="Contacto" />
+
+        <section id="contacto" style={{ paddingBottom: 96 }}>
+          <div style={{ maxWidth: 480, marginBottom: 40 }}>
+            <h2 className="display" style={{ fontStyle: 'italic', fontSize: 28 }}>Contame qué está pasando.</h2>
+            <p style={{ marginTop: 12, color: 'var(--ink-soft)' }}>Una primera conversación no compromete a nada. Sirve para entender la situación y ver si puedo ayudar.</p>
+          </div>
+          <LeadForm />
+        </section>
+      </main>
+
+      <footer style={{ borderTop: '1px solid var(--line)' }}>
+        <div style={{ ...wrap, padding: '32px 24px', display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--ink-soft)' }}>
+          <span>© {new Date().getFullYear()} {cfg.nombre_marca} — Psicóloga (M.P. a confirmar)</span>
+          <span>Buenos Aires, Argentina</span>
+        </div>
+      </footer>
+    </div>
+  );
+}
+
+function OverlapDiagram() {
+  const [ready, setReady] = useState(false);
+  useEffect(() => { const t = setTimeout(() => setReady(true), 150); return () => clearTimeout(t); }, []);
+  const base = { transition: 'all 1s ease-out', opacity: ready ? 1 : 0 };
+  return (
+    <svg viewBox="0 0 400 400" style={{ width: '100%', aspectRatio: '1/1' }}>
+      <circle cx="150" cy="200" r="120" fill="none" stroke="var(--secundario)" strokeWidth="1.5" style={{ ...base, transform: ready ? 'translateX(0)' : 'translateX(24px)' }} />
+      <circle cx="250" cy="200" r="120" fill="none" stroke="var(--acento)" strokeWidth="1.5" style={{ ...base, transform: ready ? 'translateX(0)' : 'translateX(-24px)', transitionDelay: '.15s' }} />
+      <text x="95" y="120" fill="#5B5560" fontFamily="IBM Plex Mono, monospace" fontSize="13">FAMILIA</text>
+      <text x="255" y="120" fill="#5B5560" fontFamily="IBM Plex Mono, monospace" fontSize="13">EMPRESA</text>
+    </svg>
+  );
+}
+
+// ---------------------------------------------------------------------
+// Login del panel (Supabase Auth real: mail + contraseña)
+// ---------------------------------------------------------------------
+function PanelLogin() {
+  const [email, setEmail] = useState('');
+  const [clave, setClave] = useState('');
+  const [error, setError] = useState('');
+  const [aviso, setAviso] = useState('');
+  const [cargando, setCargando] = useState(false);
+  const [verClave, setVerClave] = useState(false);
+  const [modo, setModo] = useState('login'); // 'login' | 'recuperar'
+
+  async function entrar(e) {
+    e.preventDefault();
+    if (!email.trim() || !clave.trim()) return;
+    setCargando(true); setError('');
+    try {
+      await iniciarSesionConCredenciales(email.trim(), clave.trim());
+      navigate('/panel');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setCargando(false);
+    }
+  }
+
+  async function recuperar(e) {
+    e.preventDefault();
+    if (!email.trim()) { setError('Escribí tu mail primero.'); return; }
+    setCargando(true); setError(''); setAviso('');
+    try {
+      await pedirRecuperarClave(email.trim());
+      setAviso('Si ese mail está registrado, te llegó un link para restablecer la contraseña.');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setCargando(false);
+    }
+  }
+
+  const inputStyle = { width: '100%', background: 'white', border: '1px solid var(--line)', color: 'var(--ink)', padding: '10px 12px', fontSize: 14, borderRadius: 10 };
+
+  return (
+    <div style={{ minHeight: '100vh', background: 'var(--paper)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+      <form onSubmit={modo === 'login' ? entrar : recuperar} style={{ width: '100%', maxWidth: 340, background: 'white', border: '1px solid var(--line)', borderRadius: 20, padding: 32 }}>
+        <p className="mono" style={{ fontSize: 11, letterSpacing: '0.16em', textTransform: 'uppercase', color: 'var(--acento)', marginBottom: 8 }}>
+          {modo === 'login' ? 'Panel privado' : 'Recuperar contraseña'}
+        </p>
+        <h1 className="display" style={{ fontStyle: 'italic', fontSize: 24, color: 'var(--ink)', marginBottom: 24 }}>Valentina De la Fuente</h1>
+        {error && <p style={{ color: '#B3261E', fontSize: 13.5, marginBottom: 10 }}>{error}</p>}
+        {aviso && <p style={{ color: 'var(--secundario)', fontSize: 13.5, marginBottom: 10 }}>{aviso}</p>}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <input type="email" autoFocus value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Correo" autoCapitalize="none" style={inputStyle} />
+          {modo === 'login' && (
+            <div style={{ position: 'relative' }}>
+              <input type={verClave ? 'text' : 'password'} value={clave} onChange={(e) => setClave(e.target.value)} placeholder="Contraseña"
+                style={{ ...inputStyle, paddingRight: 62 }} />
+              <button type="button" onClick={() => setVerClave((v) => !v)}
+                style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', border: 'none', background: 'none', color: 'var(--ink-soft)', fontSize: 11, cursor: 'pointer' }}>
+                {verClave ? 'Ocultar' : 'Ver'}
+              </button>
+            </div>
+          )}
+          <button type="submit" disabled={cargando}
+            style={{ marginTop: 6, width: '100%', background: 'var(--acento)', color: 'var(--paper)', padding: '10px 16px', fontSize: 14, border: 'none', borderRadius: 999, cursor: 'pointer', opacity: cargando ? 0.6 : 1 }}>
+            {cargando ? '…' : modo === 'login' ? 'Entrar' : 'Enviar link de recuperación'}
+          </button>
+          <button type="button" onClick={() => { setModo(modo === 'login' ? 'recuperar' : 'login'); setError(''); setAviso(''); }}
+            style={{ border: 'none', background: 'none', color: 'var(--ink-soft)', fontSize: 12, cursor: 'pointer', marginTop: 2 }}>
+            {modo === 'login' ? '¿Olvidaste tu contraseña?' : '← Volver a iniciar sesión'}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// Centro de Operaciones (panel)
+// ---------------------------------------------------------------------
+const NAV = [
+  { key: 'ceo', label: 'CEO' },
+  { key: 'comercial', label: 'Comercial' },
+  { key: 'marketing', label: 'Marketing' },
+  { key: 'prospeccion', label: 'Prospección' },
+  { key: 'mails', label: 'Mails' },
+  { key: 'whatsapp', label: 'WhatsApp IA' },
+  { key: 'asistente', label: 'Asistente IA' },
+  { key: 'biblioteca', label: 'Biblioteca' },
+  { key: 'gastos', label: 'Gastos' },
+  { key: 'diseno', label: 'Diseño' },
+];
+
+const PanelStyleContext = React.createContext({});
+
+function PanelShell() {
+  const [tab, setTab] = useState('ceo');
+  const active = NAV.find((n) => n.key === tab);
+
+  function handleLogout() {
+    cerrarSesion();
+    navigate('/panel/login');
+  }
+
+  const btn = { background: 'var(--ink)', color: 'var(--paper)', padding: '12px 24px', borderRadius: 999, border: 'none', fontSize: 14, cursor: 'pointer' };
+  const card = { border: '1px solid var(--line)', padding: 24, borderRadius: 4 };
+  const inputStyle = { border: '1px solid var(--line)', background: 'white', padding: '10px 12px', borderRadius: 10, fontSize: 14 };
+
+  return (
+    <PanelStyleContext.Provider value={{ btn, card, inputStyle }}>
+      <div style={{ minHeight: '100vh' }}>
+        <div style={{ background: 'var(--ink)' }}>
+          <div style={{ maxWidth: 1140, margin: '0 auto', padding: '0 24px', height: 64, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span className="display" style={{ fontStyle: 'italic', color: 'var(--paper)' }}>Valentina De la Fuente</span>
+            <button onClick={handleLogout} style={{ background: 'none', border: 'none', color: 'rgba(251,247,242,0.6)', fontSize: 14, cursor: 'pointer' }}>Cerrar sesión</button>
+          </div>
+        </div>
+        <div style={{ background: 'var(--ink)', borderTop: '1px solid rgba(255,255,255,0.1)' }}>
+          <div style={{ maxWidth: 1140, margin: '0 auto', padding: '0 24px' }}>
+            <nav style={{ display: 'flex', gap: 8, overflowX: 'auto', padding: '12px 0' }}>
+              {NAV.map((n) => (
+                <button key={n.key} onClick={() => setTab(n.key)}
+                  style={{
+                    fontSize: 14, padding: '8px 16px', borderRadius: 999, whiteSpace: 'nowrap', border: 'none', cursor: 'pointer',
+                    background: tab === n.key ? 'var(--acento)' : 'transparent',
+                    color: tab === n.key ? 'var(--paper)' : 'rgba(251,247,242,0.6)',
+                    fontWeight: tab === n.key ? 500 : 400,
+                  }}>
+                  {n.label}
+                </button>
+              ))}
+            </nav>
+          </div>
+        </div>
+        <main style={{ maxWidth: 1140, margin: '0 auto', padding: '40px 24px' }}>
+          <p className="mono" style={{ fontSize: 11, letterSpacing: '0.16em', textTransform: 'uppercase', color: 'var(--acento)', marginBottom: 12 }}>
+            Valentina · {active.label}
+          </p>
+          {tab === 'ceo' && <TabCEO />}
+          {tab === 'comercial' && <TabComercial />}
+          {tab === 'marketing' && <TabMarketing />}
+          {tab === 'prospeccion' && <TabProspeccion />}
+          {tab === 'mails' && <TabMails />}
+          {tab === 'whatsapp' && <TabWhatsapp />}
+          {tab === 'asistente' && <TabAsistente />}
+          {tab === 'biblioteca' && <TabBiblioteca />}
+          {tab === 'gastos' && <TabGastos />}
+          {tab === 'diseno' && <TabDiseno />}
+        </main>
+      </div>
+    </PanelStyleContext.Provider>
+  );
+}
+
+function TabCEO() {
+  const [stats, setStats] = useState(null);
+
+  useEffect(() => {
+    (async () => {
+      const [leads, gastos, biblioteca] = await Promise.all([
+        api('/api/leads'),
+        api('/api/gastos'),
+        api('/api/biblioteca'),
+      ]);
+      const inicioMes = new Date().toISOString().slice(0, 7);
+      const gastosMes = gastos.gastos.filter((g) => g.fecha.slice(0, 7) === inicioMes).reduce((a, g) => a + Number(g.monto), 0);
+      setStats({
+        total: leads.leads.length,
+        nuevos: leads.leads.filter((l) => l.estado === 'nuevo').length,
+        gastosMes,
+        documentos: biblioteca.documentos.filter((d) => d.estado === 'listo').length,
+      });
+    })();
+  }, []);
+
+  if (!stats) return <p style={{ color: 'var(--ink-soft)', fontSize: 14 }}>Cargando…</p>;
+
+  const Stat = ({ label, value }) => (
+    <div style={{ border: '1px solid var(--line)', padding: 24 }}>
+      <p className="display" style={{ fontSize: 32, margin: 0 }}>{value}</p>
+      <p style={{ fontSize: 12, color: 'var(--ink-soft)', marginTop: 4 }}>{label}</p>
+    </div>
+  );
+
+  return (
+    <div>
+      <h1 className="display" style={{ fontStyle: 'italic', fontSize: 24, marginBottom: 24 }}>Resumen</h1>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16 }}>
+        <Stat label="Leads totales" value={stats.total} />
+        <Stat label="Sin contactar" value={stats.nuevos} />
+        <Stat label="Gastos este mes" value={`$${stats.gastosMes.toLocaleString('es-AR')}`} />
+        <Stat label="Docs en biblioteca" value={stats.documentos} />
+      </div>
+    </div>
+  );
+}
+
+function TabComercial() {
+  const [leads, setLeads] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [enviando, setEnviando] = useState(null);
+  const { inputStyle } = React.useContext(PanelStyleContext);
+
+  const fetchLeads = useCallback(async () => {
+    setLoading(true);
+    const data = await api('/api/leads');
+    setLeads(data.leads);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { fetchLeads(); }, [fetchLeads]);
+
+  async function cambiarEstado(id, estado) {
+    setLeads((prev) => prev.map((l) => (l.id === id ? { ...l, estado } : l)));
+    await api('/api/leads', { method: 'PATCH', body: { id, estado } });
+  }
+
+  async function enviarPresentacion(id) {
+    setEnviando(id);
+    await api('/api/leads', { method: 'POST', body: { id } }).catch(() => {});
+    setEnviando(null);
+  }
+
+  if (loading) return <p style={{ color: 'var(--ink-soft)', fontSize: 14 }}>Cargando…</p>;
+
+  return (
+    <div>
+      <h1 className="display" style={{ fontStyle: 'italic', fontSize: 24, marginBottom: 24 }}>Leads</h1>
+      {!leads.length ? <p style={{ color: 'var(--ink-soft)', fontSize: 14 }}>Todavía no llegó ninguna consulta.</p> : (
+        <table style={{ width: '100%', textAlign: 'left', borderCollapse: 'collapse' }}>
+          <thead>
+            <tr style={{ fontSize: 11, color: 'var(--ink-soft)', textTransform: 'uppercase' }}>
+              <th style={{ paddingBottom: 8, fontWeight: 400 }}>Nombre</th>
+              <th style={{ fontWeight: 400 }}>Email</th>
+              <th style={{ fontWeight: 400 }}>Situación</th>
+              <th style={{ fontWeight: 400 }}>Estado</th>
+              <th style={{ fontWeight: 400 }}></th>
+            </tr>
+          </thead>
+          <tbody>
+            {leads.map((l) => (
+              <tr key={l.id} style={{ borderTop: '1px solid var(--line)' }}>
+                <td style={{ padding: '12px 0', fontSize: 14 }}>{l.nombre}</td>
+                <td style={{ fontSize: 14, color: 'var(--ink-soft)' }}>{l.email}</td>
+                <td style={{ fontSize: 13, color: 'var(--ink-soft)' }}>{l.situacion}</td>
+                <td>
+                  <select value={l.estado} onChange={(e) => cambiarEstado(l.id, e.target.value)} style={{ ...inputStyle, padding: '4px 8px', fontSize: 12 }}>
+                    {['nuevo', 'contactado', 'primera_entrevista', 'en_proceso', 'cerrado', 'descartado'].map((e) => (
+                      <option key={e} value={e}>{e.replaceAll('_', ' ')}</option>
+                    ))}
+                  </select>
+                </td>
+                <td style={{ textAlign: 'right' }}>
+                  <button onClick={() => enviarPresentacion(l.id)} disabled={enviando === l.id}
+                    style={{ background: 'none', border: 'none', color: 'var(--acento)', fontSize: 12, cursor: 'pointer' }}>
+                    {enviando === l.id ? 'Enviando…' : 'Enviar presentación'}
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
+function TabMarketing() {
+  const [items, setItems] = useState([]);
+  const [canal, setCanal] = useState('instagram');
+  const [tema, setTema] = useState('');
+  const [loading, setLoading] = useState(false);
+  const { btn, inputStyle } = React.useContext(PanelStyleContext);
+
+  const fetchItems = useCallback(async () => setItems((await api('/api/generar-contenido')).items), []);
+  useEffect(() => { fetchItems(); }, [fetchItems]);
+
+  async function generar() {
+    setLoading(true);
+    await api('/api/generar-contenido', { method: 'POST', body: { canal, tema: tema || undefined } });
+    setTema('');
+    await fetchItems();
+    setLoading(false);
+  }
+
+  return (
+    <div>
+      <h1 className="display" style={{ fontStyle: 'italic', fontSize: 24, marginBottom: 24 }}>Contenido</h1>
+      <div style={{ border: '1px solid var(--line)', padding: 24, marginBottom: 32, display: 'flex', gap: 16, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+        <Field label="Canal">
+          <select value={canal} onChange={(e) => setCanal(e.target.value)} style={inputStyle}>
+            {['instagram', 'linkedin', 'newsletter', 'blog'].map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </Field>
+        <div style={{ flex: 1, minWidth: 220 }}>
+          <Field label="Tema (opcional)"><input style={{ ...inputStyle, width: '100%' }} value={tema} onChange={(e) => setTema(e.target.value)} /></Field>
+        </div>
+        <button onClick={generar} disabled={loading} style={btn}>{loading ? 'Generando…' : 'Generar pieza'}</button>
+      </div>
+      {items.map((item) => (
+        <div key={item.id} style={{ border: '1px solid var(--line)', padding: 20, marginBottom: 16 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+            <span className="mono" style={{ fontSize: 11, color: 'var(--acento)', textTransform: 'uppercase' }}>{item.canal}</span>
+            <span style={{ fontSize: 12, color: 'var(--ink-soft)' }}>{item.estado}</span>
+          </div>
+          <p className="display" style={{ fontStyle: 'italic', fontSize: 18, margin: '0 0 8px' }}>{item.tema}</p>
+          <p style={{ fontSize: 14, color: 'var(--ink-soft)', whiteSpace: 'pre-wrap' }}>{item.copy}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+const ZONAS_BASE = ['CABA', 'GBA Norte', 'GBA Sur', 'GBA Oeste', 'La Plata', 'Rosario / Santa Fe', 'Córdoba (Provincia)'];
+const RUBROS_BASE = [
+  { value: 'empresa_familiar', label: 'empresa familiar / PyME' },
+  { value: 'estudio_contable', label: 'estudio contable' },
+  { value: 'estudio_abogados', label: 'estudio de abogados (societario)' },
+  { value: 'consultora_familiar', label: 'consultora de empresa familiar' },
+];
+
+function Chip({ active, children, onClick }) {
+  return (
+    <button type="button" onClick={onClick} style={{
+      fontSize: 14, padding: '8px 16px', borderRadius: 999, cursor: 'pointer',
+      border: active ? '1px solid var(--acento)' : '1px solid var(--line)',
+      background: active ? 'rgba(161,92,107,0.1)' : 'white',
+      color: active ? 'var(--acento)' : 'var(--ink-soft)', fontWeight: active ? 500 : 400,
+    }}>
+      {active ? '✓ ' : ''}{children}
+    </button>
+  );
+}
+
+function TabProspeccion() {
+  const [zonas, setZonas] = useState(['GBA Sur']);
+  const [rubros, setRubros] = useState(['empresa_familiar']);
+  const [zonaCustom, setZonaCustom] = useState('');
+  const [zonasExtra, setZonasExtra] = useState([]);
+  const [prospectos, setProspectos] = useState([]);
+  const [buscando, setBuscando] = useState(false);
+  const [error, setError] = useState('');
+  const { btn, card, inputStyle } = React.useContext(PanelStyleContext);
+
+  const fetchProspectos = useCallback(async () => setProspectos((await api('/api/prospectos')).prospectos), []);
+  useEffect(() => { fetchProspectos(); }, [fetchProspectos]);
+
+  function toggle(arr, setArr, v) { setArr(arr.includes(v) ? arr.filter((x) => x !== v) : [...arr, v]); }
+
+  async function buscar() {
+    setBuscando(true);
+    setError('');
+    try {
+      await api('/api/prospectos', { method: 'POST', body: { zonas, rubros } });
+    } catch (err) {
+      setError(err.data?.error || 'No se pudo completar la búsqueda');
+    }
+    await fetchProspectos();
+    setBuscando(false);
+  }
+
+  async function cambiarEstado(id, estado) {
+    setProspectos((prev) => prev.map((p) => (p.id === id ? { ...p, estado } : p)));
+    await api('/api/prospectos', { method: 'PATCH', body: { id, estado } });
+  }
+
+  return (
+    <div>
+      <h1 className="display" style={{ fontStyle: 'italic', fontSize: 24, marginBottom: 8 }}>Buscar empresas y derivadores</h1>
+      <p style={{ fontSize: 14, color: 'var(--ink-soft)', marginBottom: 24, maxWidth: 640 }}>
+        Elegí dónde y a quién buscar. Se recorren sitios públicos, cámaras del rubro y directorios — solo información pública.
+      </p>
+      <div style={card}>
+        <p className="mono" style={{ fontSize: 11, textTransform: 'uppercase', color: 'var(--acento)', marginBottom: 12 }}>Dónde buscar</p>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 16 }}>
+          {[...ZONAS_BASE, ...zonasExtra].map((z) => <Chip key={z} active={zonas.includes(z)} onClick={() => toggle(zonas, setZonas, z)}>{z}</Chip>)}
+        </div>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 32 }}>
+          <input value={zonaCustom} onChange={(e) => setZonaCustom(e.target.value)} placeholder="Otra zona…" style={{ ...inputStyle, flex: 1 }} />
+          <button type="button" onClick={() => { if (!zonaCustom.trim()) return; setZonasExtra((p) => [...p, zonaCustom.trim()]); setZonas((p) => [...p, zonaCustom.trim()]); setZonaCustom(''); }}
+            style={{ fontSize: 14, border: '1px solid var(--line)', borderRadius: 999, padding: '0 16px', background: 'white', cursor: 'pointer' }}>+ Agregar</button>
+        </div>
+        <p className="mono" style={{ fontSize: 11, textTransform: 'uppercase', color: 'var(--acento)', marginBottom: 12 }}>A quién buscar</p>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 32 }}>
+          {RUBROS_BASE.map((r) => <Chip key={r.value} active={rubros.includes(r.value)} onClick={() => toggle(rubros, setRubros, r.value)}>{r.label}</Chip>)}
+        </div>
+        <button onClick={buscar} disabled={buscando || !zonas.length || !rubros.length} style={btn}>{buscando ? 'Buscando…' : 'Empezar a buscar'}</button>
+        {error && <p style={{ color: 'var(--acento)', fontSize: 14, marginTop: 12 }}>{error}</p>}
+      </div>
+
+      <div style={{ marginTop: 40 }}>
+        {!prospectos.length ? <p style={{ color: 'var(--ink-soft)', fontSize: 14 }}>Todavía no se encontró nada.</p> : (
+          <table style={{ width: '100%', textAlign: 'left', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr style={{ fontSize: 11, color: 'var(--ink-soft)', textTransform: 'uppercase' }}>
+                <th style={{ paddingBottom: 8, fontWeight: 400 }}>Nombre</th><th style={{ fontWeight: 400 }}>Rubro</th>
+                <th style={{ fontWeight: 400 }}>Zona</th><th style={{ fontWeight: 400 }}>Contacto</th><th style={{ fontWeight: 400 }}>Estado</th>
+              </tr>
+            </thead>
+            <tbody>
+              {prospectos.map((p) => (
+                <tr key={p.id} style={{ borderTop: '1px solid var(--line)' }}>
+                  <td style={{ padding: '12px 0', fontSize: 14 }}>{p.nombre}</td>
+                  <td style={{ fontSize: 12, color: 'var(--ink-soft)' }}>{p.rubro}</td>
+                  <td style={{ fontSize: 12, color: 'var(--ink-soft)' }}>{p.zona}</td>
+                  <td style={{ fontSize: 12, color: 'var(--ink-soft)' }}>{p.email || p.telefono || '—'}</td>
+                  <td>
+                    <select value={p.estado} onChange={(e) => cambiarEstado(p.id, e.target.value)} style={{ ...inputStyle, padding: '4px 8px', fontSize: 12 }}>
+                      {['sin_contactar', 'contactado', 'respondido', 'descartado'].map((e) => <option key={e} value={e}>{e.replaceAll('_', ' ')}</option>)}
+                    </select>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function TabMails() {
+  const [sub, setSub] = useState('nuevo');
+  const tabs = [['nuevo', 'Nuevo envío'], ['historial', 'Historial y métricas'], ['whatsapp', 'WhatsApp masivo']];
+  return (
+    <div>
+      <h1 className="display" style={{ fontStyle: 'italic', fontSize: 24, marginBottom: 24 }}>Envíos y seguimiento</h1>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 24 }}>
+        {tabs.map(([k, label]) => (
+          <button key={k} onClick={() => setSub(k)} style={{
+            fontSize: 14, padding: '8px 16px', borderRadius: 999, cursor: 'pointer', border: sub === k ? 'none' : '1px solid var(--line)',
+            background: sub === k ? 'var(--ink)' : 'white', color: sub === k ? 'var(--paper)' : 'var(--ink-soft)',
+          }}>{label}</button>
+        ))}
+      </div>
+      {sub === 'nuevo' && <MailsNuevoEnvio />}
+      {sub === 'historial' && <MailsHistorial />}
+      {sub === 'whatsapp' && (
+        <div style={{ border: '1px solid var(--line)', padding: 32, textAlign: 'center' }}>
+          <p style={{ fontSize: 14, color: 'var(--ink-soft)', maxWidth: 420, margin: '0 auto' }}>
+            El envío masivo por WhatsApp se activa junto con el agente de WhatsApp IA, pendiente de credenciales de Meta Business.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MailsNuevoEnvio() {
+  const [contactos, setContactos] = useState([]);
+  const [sel, setSel] = useState(new Set());
+  const [form, setForm] = useState({ remitente: '', responder_a: '', asunto: '', cuerpo: 'Hola {{nombre}},\n\n', incluir_cta: true, adjuntar_cv: true });
+  const [enviando, setEnviando] = useState(false);
+  const [resultado, setResultado] = useState(null);
+  const { btn, inputStyle } = React.useContext(PanelStyleContext);
+
+  useEffect(() => { api('/api/mails-contactos').then((d) => setContactos(d.contactos)); }, []);
+
+  async function enviar() {
+    setEnviando(true);
+    setResultado(null);
+    try {
+      const destinatarios = contactos.filter((c) => sel.has(c.id));
+      const data = await api('/api/enviar-campana', { method: 'POST', body: { ...form, destinatarios } });
+      setResultado(`Enviado a ${data.enviados}, ${data.errores} error(es).`);
+    } catch (err) {
+      setResultado(err.data?.error || 'Error al enviar');
+    }
+    setEnviando(false);
+  }
+
+  return (
+    <div style={{ border: '1px solid var(--line)', padding: 24, display: 'flex', flexDirection: 'column', gap: 20 }}>
+      <Field label="Remitente"><input style={{ ...inputStyle, width: '100%' }} value={form.remitente} onChange={(e) => setForm((f) => ({ ...f, remitente: e.target.value }))} placeholder="Valentina De la Fuente <consultas@tudominio.com>" /></Field>
+      <Field label="Responder a (opcional)"><input style={{ ...inputStyle, width: '100%' }} value={form.responder_a} onChange={(e) => setForm((f) => ({ ...f, responder_a: e.target.value }))} /></Field>
+      <Field label="Asunto"><input style={{ ...inputStyle, width: '100%' }} value={form.asunto} onChange={(e) => setForm((f) => ({ ...f, asunto: e.target.value }))} /></Field>
+      <Field label="Cuerpo (usá {{nombre}} para personalizar)"><textarea rows={8} style={{ ...inputStyle, width: '100%', resize: 'none' }} value={form.cuerpo} onChange={(e) => setForm((f) => ({ ...f, cuerpo: e.target.value }))} /></Field>
+      <label style={{ fontSize: 14, display: 'flex', gap: 8, alignItems: 'center' }}>
+        <input type="checkbox" checked={form.incluir_cta} onChange={(e) => setForm((f) => ({ ...f, incluir_cta: e.target.checked }))} /> Incluir botón "Ver más"
+      </label>
+      <label style={{ fontSize: 14, display: 'flex', gap: 8, alignItems: 'center' }}>
+        <input type="checkbox" checked={form.adjuntar_cv} onChange={(e) => setForm((f) => ({ ...f, adjuntar_cv: e.target.checked }))} /> Incluir link al CV
+      </label>
+      <div style={{ borderTop: '1px solid var(--line)', paddingTop: 20 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12 }}>
+          <p style={{ fontSize: 14 }}>{sel.size} de {contactos.length} contactos con mail seleccionados</p>
+          <div style={{ display: 'flex', gap: 12 }}>
+            <button onClick={() => setSel(new Set(contactos.map((c) => c.id)))} style={{ background: 'none', border: 'none', color: 'var(--acento)', fontSize: 12, cursor: 'pointer' }}>Todos</button>
+            <button onClick={() => setSel(new Set())} style={{ background: 'none', border: 'none', color: 'var(--ink-soft)', fontSize: 12, cursor: 'pointer' }}>Ninguno</button>
+          </div>
+        </div>
+        <div style={{ maxHeight: 220, overflowY: 'auto', border: '1px solid var(--line)', borderRadius: 10 }}>
+          {contactos.map((c) => (
+            <label key={c.id} style={{ display: 'flex', gap: 12, alignItems: 'center', padding: '8px 12px', fontSize: 14, borderBottom: '1px solid var(--line)' }}>
+              <input type="checkbox" checked={sel.has(c.id)} onChange={() => setSel((prev) => { const n = new Set(prev); n.has(c.id) ? n.delete(c.id) : n.add(c.id); return n; })} />
+              <span>{c.nombre}</span><span style={{ fontSize: 12, color: 'var(--ink-soft)', marginLeft: 'auto' }}>{c.email}</span>
+            </label>
+          ))}
+        </div>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+        <button onClick={enviar} disabled={enviando || !sel.size} style={{ ...btn, width: 'fit-content' }}>{enviando ? 'Enviando…' : `Enviar a ${sel.size}`}</button>
+        {resultado && <p style={{ fontSize: 14, color: 'var(--ink-soft)' }}>{resultado}</p>}
+      </div>
+    </div>
+  );
+}
+
+function MailsHistorial() {
+  const [data, setData] = useState(null);
+  useEffect(() => { api('/api/mails-historial').then(setData); }, []);
+  if (!data) return <p style={{ color: 'var(--ink-soft)', fontSize: 14 }}>Cargando…</p>;
+  const Stat = ({ label, value }) => (
+    <div style={{ border: '1px solid var(--line)', padding: 16 }}>
+      <p className="display" style={{ fontSize: 24, margin: 0 }}>{value}</p>
+      <p style={{ fontSize: 12, color: 'var(--ink-soft)', marginTop: 4 }}>{label}</p>
+    </div>
+  );
+  return (
+    <div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 32 }}>
+        <Stat label="Mails enviados" value={data.stats.enviados} />
+        <Stat label="Tasa de apertura" value={`${data.stats.tasa_apertura}%`} />
+        <Stat label="Tasa de click" value={`${data.stats.tasa_click}%`} />
+        <Stat label="Errores" value={data.stats.errores} />
+      </div>
+      {!data.log.length ? <p style={{ color: 'var(--ink-soft)', fontSize: 14 }}>Todavía no se mandó ningún mail.</p> : (
+        <table style={{ width: '100%', textAlign: 'left', borderCollapse: 'collapse' }}>
+          <thead><tr style={{ fontSize: 11, color: 'var(--ink-soft)', textTransform: 'uppercase' }}>
+            <th style={{ paddingBottom: 8, fontWeight: 400 }}>Destinatario</th><th style={{ fontWeight: 400 }}>Asunto</th><th style={{ fontWeight: 400 }}>Estado</th><th style={{ fontWeight: 400 }}>Fecha</th>
+          </tr></thead>
+          <tbody>
+            {data.log.map((l) => (
+              <tr key={l.id} style={{ borderTop: '1px solid var(--line)' }}>
+                <td style={{ padding: '12px 0', fontSize: 14 }}>{l.destinatario}</td>
+                <td style={{ fontSize: 14, color: 'var(--ink-soft)' }}>{l.asunto}</td>
+                <td style={{ fontSize: 12, color: l.estado === 'error' ? 'var(--acento)' : 'var(--secundario)' }}>{l.estado}</td>
+                <td style={{ fontSize: 12, color: 'var(--ink-soft)' }}>{new Date(l.created_at).toLocaleDateString('es-AR')}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
+function TabWhatsapp() {
+  const [conversaciones, setConversaciones] = useState([]);
+  const [activa, setActiva] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => { api('/api/whatsapp').then((d) => { setConversaciones(d.conversaciones || []); setLoading(false); }); }, []);
+
+  return (
+    <div>
+      <h1 className="display" style={{ fontStyle: 'italic', fontSize: 24, marginBottom: 8 }}>Conversaciones automáticas</h1>
+      <p style={{ fontSize: 14, color: 'var(--ink-soft)', marginBottom: 24, maxWidth: 520 }}>
+        El agente contesta solo hasta que tocás "Tomar el control". Falta cargar las credenciales de Meta Business.
+      </p>
+      <div style={{ display: 'grid', gridTemplateColumns: '280px 1fr', gap: 16 }}>
+        <div style={{ border: '1px solid var(--line)', background: 'white', minHeight: 200 }}>
+          {loading ? <p style={{ padding: 16, fontSize: 14, color: 'var(--ink-soft)' }}>Cargando…</p> :
+            !conversaciones.length ? <p style={{ padding: 16, fontSize: 14, color: 'var(--ink-soft)' }}>Todavía no llegó ningún mensaje de WhatsApp.</p> :
+            conversaciones.map((c) => (
+              <button key={c.id} onClick={() => setActiva(c)} style={{ display: 'block', width: '100%', textAlign: 'left', padding: '12px 16px', border: 'none', borderBottom: '1px solid var(--line)', background: activa && activa.id === c.id ? 'rgba(161,92,107,0.1)' : 'white', cursor: 'pointer', fontSize: 14 }}>
+                {c.telefono}
+              </button>
+            ))}
+        </div>
+        <div style={{ border: '1px solid var(--line)', background: 'white', minHeight: 200, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <p style={{ fontSize: 14, color: 'var(--ink-soft)' }}>{activa ? `Conversación con ${activa.telefono}` : 'Elegí una conversación de la izquierda.'}</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TabAsistente() {
+  const [mensajes, setMensajes] = useState([]);
+  const [historial, setHistorial] = useState([]);
+  const [input, setInput] = useState('');
+  const [loading, setLoading] = useState(false);
+  const bottomRef = useRef(null);
+  const { inputStyle, btn } = React.useContext(PanelStyleContext);
+
+  useEffect(() => { bottomRef.current && bottomRef.current.scrollIntoView({ behavior: 'smooth' }); }, [mensajes]);
+
+  async function enviar(e) {
+    e.preventDefault();
+    if (!input.trim() || loading) return;
+    const pregunta = input;
+    setInput('');
+    setMensajes((m) => [...m, { rol: 'yo', texto: pregunta }]);
+    setLoading(true);
+    try {
+      const data = await api('/api/asistente', { method: 'POST', body: { pregunta, historial } });
+      setMensajes((m) => [...m, { rol: 'guia', texto: data.respuesta }]);
+      setHistorial(data.historial || []);
+    } catch {
+      setMensajes((m) => [...m, { rol: 'guia', texto: 'Hubo un error, probá de nuevo.' }]);
+    }
+    setLoading(false);
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 220px)' }}>
+      <h1 className="display" style={{ fontStyle: 'italic', fontSize: 24, marginBottom: 4 }}>Asistente IA — La Guía</h1>
+      <p style={{ fontSize: 14, color: 'var(--ink-soft)', marginBottom: 20 }}>Preguntale sobre tu bibliografía, tests, gastos del estudio o el estado de tus leads y turnos.</p>
+      <div style={{ flex: 1, overflowY: 'auto', border: '1px solid var(--line)', padding: 20, background: 'rgba(255,255,255,0.4)', display: 'flex', flexDirection: 'column', gap: 16 }}>
+        {mensajes.map((m, i) => (
+          <div key={i} style={{ textAlign: m.rol === 'yo' ? 'right' : 'left' }}>
+            <div style={{ display: 'inline-block', maxWidth: '85%', textAlign: 'left', padding: '10px 16px', fontSize: 14, whiteSpace: 'pre-wrap', borderRadius: 12, background: m.rol === 'yo' ? 'var(--ink)' : 'white', color: m.rol === 'yo' ? 'var(--paper)' : 'var(--ink)', border: m.rol === 'yo' ? 'none' : '1px solid var(--line)' }}>
+              {m.texto}
+            </div>
+          </div>
+        ))}
+        {loading && <p style={{ fontSize: 12, color: 'var(--ink-soft)' }}>Pensando…</p>}
+        <div ref={bottomRef} />
+      </div>
+      <form onSubmit={enviar} style={{ marginTop: 16, display: 'flex', gap: 12 }}>
+        <input value={input} onChange={(e) => setInput(e.target.value)} placeholder="Escribile a la Guía…" style={{ ...inputStyle, flex: 1 }} />
+        <button type="submit" disabled={loading} style={btn}>Enviar</button>
+      </form>
+    </div>
+  );
+}
+
+function TabBiblioteca() {
+  const [documentos, setDocumentos] = useState([]);
+  const [loadingList, setLoadingList] = useState(true);
+  const [subiendo, setSubiendo] = useState(false);
+  const [titulo, setTitulo] = useState('');
+  const [categoria, setCategoria] = useState('bibliografia');
+  const [archivo, setArchivo] = useState(null);
+  const [error, setError] = useState('');
+  const { btn, inputStyle } = React.useContext(PanelStyleContext);
+
+  const fetchDocs = useCallback(async () => { setLoadingList(true); setDocumentos((await api('/api/biblioteca')).documentos); setLoadingList(false); }, []);
+  useEffect(() => { fetchDocs(); }, [fetchDocs]);
+
+  async function subir(e) {
+    e.preventDefault();
+    if (!archivo) return;
+    setSubiendo(true);
+    setError('');
+    try {
+      const dataBase64 = await fileToBase64(archivo);
+      await api('/api/biblioteca', { method: 'POST', body: { titulo: titulo || archivo.name, categoria, filename: archivo.name, dataBase64 } });
+      setTitulo(''); setArchivo(null);
+    } catch (err) {
+      setError(err.data?.error || 'No se pudo subir el archivo');
+    }
+    await fetchDocs();
+    setSubiendo(false);
+  }
+
+  return (
+    <div>
+      <h1 className="display" style={{ fontStyle: 'italic', fontSize: 24, marginBottom: 8 }}>Biblioteca</h1>
+      <p style={{ fontSize: 14, color: 'var(--ink-soft)', marginBottom: 24, maxWidth: 560 }}>
+        Subí PDFs de bibliografía, tests o apuntes para que la Guía los use. Los PDF escaneados sin texto no se procesan. Máximo ~4MB por archivo.
+      </p>
+      <form onSubmit={subir} style={{ border: '1px solid var(--line)', padding: 24, marginBottom: 32, display: 'flex', flexDirection: 'column', gap: 16 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+          <Field label="Título"><input style={{ ...inputStyle, width: '100%' }} value={titulo} onChange={(e) => setTitulo(e.target.value)} /></Field>
+          <Field label="Categoría">
+            <select style={inputStyle} value={categoria} onChange={(e) => setCategoria(e.target.value)}>
+              {['bibliografia', 'test', 'apunte', 'otro'].map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </Field>
+        </div>
+        <Field label="Archivo PDF"><input type="file" accept="application/pdf" onChange={(e) => setArchivo(e.target.files[0] || null)} /></Field>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+          <button type="submit" disabled={subiendo || !archivo} style={{ ...btn, width: 'fit-content' }}>{subiendo ? 'Procesando…' : 'Subir a la biblioteca'}</button>
+          {error && <p style={{ color: 'var(--acento)', fontSize: 14 }}>{error}</p>}
+        </div>
+      </form>
+      {loadingList ? <p style={{ color: 'var(--ink-soft)', fontSize: 14 }}>Cargando…</p> : documentos.map((d) => (
+        <div key={d.id} style={{ border: '1px solid var(--line)', padding: 16, marginBottom: 12, display: 'flex', justifyContent: 'space-between' }}>
+          <div>
+            <p style={{ fontSize: 14, margin: 0 }}>{d.titulo}</p>
+            <p style={{ fontSize: 12, color: 'var(--ink-soft)', margin: '4px 0 0' }}>{d.categoria} · {d.estado === 'listo' ? `${d.paginas || '?'} páginas` : d.estado}</p>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function TabGastos() {
+  const [gastos, setGastos] = useState([]);
+  const [form, setForm] = useState({ fecha: new Date().toISOString().slice(0, 10), categoria: 'consultorio', descripcion: '', monto: '' });
+  const [saving, setSaving] = useState(false);
+  const { btn, inputStyle } = React.useContext(PanelStyleContext);
+
+  const fetchGastos = useCallback(async () => setGastos((await api('/api/gastos')).gastos), []);
+  useEffect(() => { fetchGastos(); }, [fetchGastos]);
+
+  async function guardar() {
+    setSaving(true);
+    await api('/api/gastos', { method: 'POST', body: { ...form, monto: Number(form.monto) } });
+    setForm((f) => ({ ...f, descripcion: '', monto: '' }));
+    await fetchGastos();
+    setSaving(false);
+  }
+
+  const totalMes = gastos.filter((g) => g.fecha.slice(0, 7) === new Date().toISOString().slice(0, 7)).reduce((a, g) => a + Number(g.monto), 0);
+
+  return (
+    <div>
+      <h1 className="display" style={{ fontStyle: 'italic', fontSize: 24, marginBottom: 4 }}>Gastos</h1>
+      <p style={{ fontSize: 14, color: 'var(--ink-soft)', marginBottom: 24 }}>Total de este mes: <strong>${totalMes.toLocaleString('es-AR')}</strong></p>
+      <div style={{ border: '1px solid var(--line)', padding: 24, marginBottom: 32, display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 16, alignItems: 'end' }}>
+        <Field label="Fecha"><input type="date" style={inputStyle} value={form.fecha} onChange={(e) => setForm((f) => ({ ...f, fecha: e.target.value }))} /></Field>
+        <Field label="Categoría">
+          <select style={inputStyle} value={form.categoria} onChange={(e) => setForm((f) => ({ ...f, categoria: e.target.value }))}>
+            {['consultorio', 'insumos', 'marketing', 'impuestos', 'formacion', 'otro'].map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </Field>
+        <div style={{ gridColumn: 'span 2' }}>
+          <Field label="Descripción"><input style={{ ...inputStyle, width: '100%' }} value={form.descripcion} onChange={(e) => setForm((f) => ({ ...f, descripcion: e.target.value }))} /></Field>
+        </div>
+        <Field label="Monto"><input type="number" style={inputStyle} value={form.monto} onChange={(e) => setForm((f) => ({ ...f, monto: e.target.value }))} /></Field>
+        <button onClick={guardar} disabled={saving} style={{ ...btn, gridColumn: '1 / -1', width: 'fit-content' }}>{saving ? 'Guardando…' : 'Cargar gasto'}</button>
+      </div>
+      <table style={{ width: '100%', textAlign: 'left', borderCollapse: 'collapse' }}>
+        <thead><tr style={{ fontSize: 11, color: 'var(--ink-soft)', textTransform: 'uppercase' }}>
+          <th style={{ paddingBottom: 8, fontWeight: 400 }}>Fecha</th><th style={{ fontWeight: 400 }}>Categoría</th><th style={{ fontWeight: 400 }}>Descripción</th><th style={{ fontWeight: 400 }}>Monto</th>
+        </tr></thead>
+        <tbody>
+          {gastos.map((g) => (
+            <tr key={g.id} style={{ borderTop: '1px solid var(--line)' }}>
+              <td style={{ padding: '10px 0', fontSize: 13, color: 'var(--ink-soft)' }}>{g.fecha}</td>
+              <td style={{ fontSize: 13, color: 'var(--ink-soft)' }}>{g.categoria}</td>
+              <td style={{ fontSize: 14 }}>{g.descripcion || '—'}</td>
+              <td style={{ fontSize: 14 }}>${Number(g.monto).toLocaleString('es-AR')}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function TabDiseno() {
+  const [cfg, setCfg] = useState(null);
+  const [perfil, setPerfil] = useState(null);
+  const [fotoFile, setFotoFile] = useState(null);
+  const [logoFile, setLogoFile] = useState(null);
+  const [cvFile, setCvFile] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [ok, setOk] = useState(false);
+  const { btn, inputStyle } = React.useContext(PanelStyleContext);
+
+  useEffect(() => {
+    api('/api/operaciones').then((d) => {
+      setCfg({ ...d.config, foto_url: d.foto_url, logo_url: d.logo_url });
+      setPerfil({ ...d.perfil, especialidades: (d.perfil?.especialidades || []).join(', '), cv_url: d.cv_url });
+    });
+  }, []);
+
+  async function guardar() {
+    setSaving(true);
+    setOk(false);
+    const body = { config: { ...cfg }, perfil: { ...perfil } };
+    delete body.config.foto_url; delete body.config.logo_url;
+    delete body.perfil.cv_url;
+    if (fotoFile) body.foto = { dataBase64: await fileToBase64(fotoFile), contentType: fotoFile.type };
+    if (logoFile) body.logo = { dataBase64: await fileToBase64(logoFile), contentType: logoFile.type };
+    if (cvFile) body.cv = { dataBase64: await fileToBase64(cvFile), contentType: cvFile.type };
+    await api('/api/operaciones', { method: 'POST', body });
+    const d = await api('/api/operaciones');
+    setCfg({ ...d.config, foto_url: d.foto_url, logo_url: d.logo_url });
+    setPerfil({ ...d.perfil, especialidades: (d.perfil?.especialidades || []).join(', '), cv_url: d.cv_url });
+    setFotoFile(null); setLogoFile(null); setCvFile(null);
+    setOk(true);
+    setSaving(false);
+  }
+
+  if (!cfg || !perfil) return <p style={{ color: 'var(--ink-soft)', fontSize: 14 }}>Cargando…</p>;
+
+  const box = { border: '1px solid var(--line)', background: 'white', borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', flexShrink: 0 };
+
+  return (
+    <div style={{ maxWidth: 640 }}>
+      <h1 className="display" style={{ fontStyle: 'italic', fontSize: 24, marginBottom: 4 }}>Personalizar la marca</h1>
+      <p style={{ fontSize: 14, color: 'var(--ink-soft)', marginBottom: 32 }}>Logo, foto, colores, textos del inicio y perfil profesional (CV) — todo en un solo panel.</p>
+
+      <Section title="Logo (opcional)">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 20 }}>
+          <div style={{ ...box, width: 96, height: 96 }}>{cfg.logo_url ? <img src={cfg.logo_url} style={{ width: '100%', height: '100%', objectFit: 'contain', padding: 8 }} /> : <span className="mono" style={{ fontSize: 9, color: 'var(--ink-soft)' }}>SIN LOGO</span>}</div>
+          <input type="file" accept="image/*" onChange={(e) => setLogoFile(e.target.files[0] || null)} />
+        </div>
+      </Section>
+
+      <Section title="Foto de portada">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 20 }}>
+          <div style={{ ...box, width: 96, height: 112 }}>{cfg.foto_url ? <img src={cfg.foto_url} style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <span className="mono" style={{ fontSize: 9, color: 'var(--ink-soft)' }}>SIN FOTO</span>}</div>
+          <input type="file" accept="image/*" onChange={(e) => setFotoFile(e.target.files[0] || null)} />
+        </div>
+      </Section>
+
+      <Section title="Colores">
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
+          <ColorField label="Acento" value={cfg.color_acento} onChange={(v) => setCfg((c) => ({ ...c, color_acento: v }))} />
+          <ColorField label="Secundario" value={cfg.color_secundario} onChange={(v) => setCfg((c) => ({ ...c, color_secundario: v }))} />
+          <ColorField label="Fondo" value={cfg.color_fondo} onChange={(v) => setCfg((c) => ({ ...c, color_fondo: v }))} />
+        </div>
+      </Section>
+
+      <Section title="Textos del inicio">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <Field label="Nombre / marca"><input style={{ ...inputStyle, width: '100%' }} value={cfg.nombre_marca || ''} onChange={(e) => setCfg((c) => ({ ...c, nombre_marca: e.target.value }))} /></Field>
+          <Field label="Título principal"><textarea rows={2} style={{ ...inputStyle, width: '100%', resize: 'none' }} value={cfg.titulo_hero || ''} onChange={(e) => setCfg((c) => ({ ...c, titulo_hero: e.target.value }))} /></Field>
+          <Field label="Subtítulo"><textarea rows={3} style={{ ...inputStyle, width: '100%', resize: 'none' }} value={cfg.subtitulo_hero || ''} onChange={(e) => setCfg((c) => ({ ...c, subtitulo_hero: e.target.value }))} /></Field>
+          <Field label="Texto del botón"><input style={{ ...inputStyle, width: '100%' }} value={cfg.cta_texto || ''} onChange={(e) => setCfg((c) => ({ ...c, cta_texto: e.target.value }))} /></Field>
+        </div>
+      </Section>
+
+      <Section title="Perfil profesional (para los mails)">
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
+          <Field label="Título"><input style={{ ...inputStyle, width: '100%' }} value={perfil.titulo || ''} onChange={(e) => setPerfil((p) => ({ ...p, titulo: e.target.value }))} /></Field>
+          <Field label="Matrícula"><input style={{ ...inputStyle, width: '100%' }} value={perfil.matricula || ''} onChange={(e) => setPerfil((p) => ({ ...p, matricula: e.target.value }))} /></Field>
+        </div>
+        <div style={{ marginBottom: 16 }}>
+          <Field label="Especialidades (separadas por coma)"><input style={{ ...inputStyle, width: '100%' }} value={perfil.especialidades || ''} onChange={(e) => setPerfil((p) => ({ ...p, especialidades: e.target.value }))} /></Field>
+        </div>
+        <div style={{ marginBottom: 16 }}>
+          <Field label="Bio corta"><textarea rows={3} style={{ ...inputStyle, width: '100%', resize: 'none' }} value={perfil.bio || ''} onChange={(e) => setPerfil((p) => ({ ...p, bio: e.target.value }))} /></Field>
+        </div>
+        <Field label={<span>CV (PDF) {perfil.cv_url && <a href={perfil.cv_url} target="_blank" style={{ color: 'var(--acento)', marginLeft: 8 }}>ver el actual</a>}</span>}>
+          <input type="file" accept="application/pdf" onChange={(e) => setCvFile(e.target.files[0] || null)} />
+        </Field>
+      </Section>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+        <button onClick={guardar} disabled={saving} style={btn}>{saving ? 'Guardando…' : 'Guardar cambios'}</button>
+        {ok && <p style={{ fontSize: 14, color: 'var(--secundario)' }}>Guardado. Ya se ve en el sitio.</p>}
+      </div>
+    </div>
+  );
+}
+
+function Section({ title, children }) {
+  return (
+    <div style={{ marginBottom: 36 }}>
+      <p className="mono" style={{ fontSize: 11, textTransform: 'uppercase', color: 'var(--acento)', marginBottom: 16 }}>{title}</p>
+      {children}
+    </div>
+  );
+}
+
+function ColorField({ label, value, onChange }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <label style={{ fontSize: 12, color: 'var(--ink-soft)' }}>{label}</label>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, border: '1px solid var(--line)', background: 'white', padding: '8px 10px', borderRadius: 10 }}>
+        <input type="color" value={value} onChange={(e) => onChange(e.target.value)} style={{ width: 28, height: 28, border: 'none', padding: 0, background: 'none', cursor: 'pointer' }} />
+        <input type="text" value={value} onChange={(e) => onChange(e.target.value)} style={{ fontSize: 12, flex: 1, border: 'none', outline: 'none', minWidth: 0 }} />
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// Router raíz
+// ---------------------------------------------------------------------
+function App() {
+  const [path, setPath] = useState(window.location.pathname);
+  const [authChecked, setAuthChecked] = useState(false);
+  const [authed, setAuthed] = useState(false);
+
+  useEffect(() => {
+    const onPop = () => setPath(window.location.pathname);
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
+
+  useEffect(() => {
+    if (path.startsWith('/panel') && path !== '/panel/login') {
+      const t = tokenGuardado();
+      setAuthed(Boolean(t));
+      setAuthChecked(true);
+      if (!t) navigate('/panel/login');
+    } else {
+      setAuthChecked(true);
+    }
+  }, [path]);
+
+  if (path === '/panel/login') return <PanelLogin />;
+  if (path.startsWith('/panel')) {
+    if (!authChecked) return null;
+    return authed ? <PanelShell /> : null;
+  }
+  return <Landing />;
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
