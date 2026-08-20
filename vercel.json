@@ -1,7 +1,4 @@
 {
-  "rewrites": [
-    { "source": "/panel/(.*)", "destination": "/index.html" }
-  ],
   "crons": [
     { "path": "/api/agente-diario", "schedule": "0 11 * * *" }
   ]

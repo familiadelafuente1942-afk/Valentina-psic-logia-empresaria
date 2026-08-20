@@ -118,6 +118,34 @@ async function api(path, opts = {}, _reintentado) {
   return data;
 }
 
+// Llama directo a la API REST de Supabase (tablas), con la sesión del
+// usuario logueado — igual que hace V+V. No pasa por ninguna función
+// propia: lee/escribe directo, protegido por los permisos (RLS) que
+// dejamos en la migración 007. Reintenta una vez si el token venció.
+async function vvFetch(ruta, opciones, _reintentado) {
+  const t = tokenGuardado() || SUPA_ANON_KEY;
+  const res = await fetch(`${SUPA_URL}/rest/v1/${ruta}`, {
+    ...opciones,
+    headers: {
+      apikey: SUPA_ANON_KEY,
+      Authorization: `Bearer ${t}`,
+      'Content-Type': 'application/json',
+      Prefer: 'return=representation',
+      ...(opciones && opciones.headers),
+    },
+  });
+  if (res.status === 401 && !_reintentado) {
+    const renovado = await renovarSesion();
+    if (renovado) return vvFetch(ruta, opciones, true);
+  }
+  if (!res.ok) {
+    const txt = await res.text();
+    throw new Error(`${res.status} · ${txt.slice(0, 200)}`);
+  }
+  const cuerpo = await res.text();
+  return cuerpo ? JSON.parse(cuerpo) : null;
+}
+
 function fileToBase64(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -161,8 +189,15 @@ function LeadForm() {
     e.preventDefault();
     setStatus('sending');
     try {
-      await api('/api/recibir-lead', { method: 'POST', body: form });
+      const [lead] = await vvFetch('leads', { method: 'POST', body: JSON.stringify(form) });
       setStatus('sent');
+      // El mail de confirmación sí necesita una función propia (usa la
+      // clave de Resend, que nunca puede estar en el navegador).
+      fetch('/api/notificar-lead', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(lead),
+      }).catch(() => {});
     } catch {
       setStatus('error');
     }
@@ -246,7 +281,9 @@ function Landing() {
             {cfg.logo_url && <img src={cfg.logo_url} alt="" style={{ height: 32, width: 32, objectFit: 'contain' }} />}
             <span className="display" style={{ fontStyle: 'italic', fontSize: 18 }}>{cfg.nombre_marca}</span>
           </span>
-          <a href="#contacto" style={{ fontSize: 14, border: '1.5px solid var(--acento)', color: 'var(--acento)', padding: '8px 20px', borderRadius: 999, textDecoration: 'none', fontWeight: 500 }}>Escribime</a>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <a href="#contacto" style={{ fontSize: 14, border: '1.5px solid var(--acento)', color: 'var(--acento)', padding: '8px 20px', borderRadius: 999, textDecoration: 'none', fontWeight: 500 }}>Escribime</a>
+          </span>
         </div>
       </header>
 
@@ -335,9 +372,10 @@ function Landing() {
       </main>
 
       <footer style={{ borderTop: '1px solid var(--line)' }}>
-        <div style={{ ...wrap, padding: '32px 24px', display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--ink-soft)' }}>
+        <div style={{ ...wrap, padding: '32px 24px', display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8, fontSize: 12, color: 'var(--ink-soft)' }}>
           <span>© {new Date().getFullYear()} {cfg.nombre_marca} — Psicóloga (M.P. a confirmar)</span>
           <span>Buenos Aires, Argentina</span>
+          <button onClick={() => { window.location.hash = '#operaciones'; window.dispatchEvent(new HashChangeEvent('hashchange')); }} style={{ fontSize: 10.5, border: 'none', background: 'none', color: 'var(--ink-soft)', opacity: 0.55, cursor: 'pointer' }}>Acceso interno →</button>
         </div>
       </footer>
     </div>
@@ -361,7 +399,7 @@ function OverlapDiagram() {
 // ---------------------------------------------------------------------
 // Login del panel (Supabase Auth real: mail + contraseña)
 // ---------------------------------------------------------------------
-function PanelLogin() {
+function LoginForm({ onLogin }) {
   const [email, setEmail] = useState('');
   const [clave, setClave] = useState('');
   const [error, setError] = useState('');
@@ -376,7 +414,7 @@ function PanelLogin() {
     setCargando(true); setError('');
     try {
       await iniciarSesionConCredenciales(email.trim(), clave.trim());
-      navigate('/panel');
+      onLogin();
     } catch (err) {
       setError(err.message);
     } finally {
@@ -453,18 +491,26 @@ const NAV = [
 
 const PanelStyleContext = React.createContext({});
 
-function PanelShell() {
+function CentroOperaciones() {
+  const [autenticado, setAutenticado] = useState(!!tokenGuardado());
   const [tab, setTab] = useState('ceo');
   const active = NAV.find((n) => n.key === tab);
 
   function handleLogout() {
     cerrarSesion();
-    navigate('/panel/login');
+    setAutenticado(false);
+  }
+
+  function volverAlSitio() {
+    window.location.hash = '';
+    window.dispatchEvent(new HashChangeEvent('hashchange'));
   }
 
   const btn = { background: 'var(--ink)', color: 'var(--paper)', padding: '12px 24px', borderRadius: 999, border: 'none', fontSize: 14, cursor: 'pointer' };
   const card = { border: '1px solid var(--line)', padding: 24, borderRadius: 4 };
   const inputStyle = { border: '1px solid var(--line)', background: 'white', padding: '10px 12px', borderRadius: 10, fontSize: 14 };
+
+  if (!autenticado) return <LoginForm onLogin={() => setAutenticado(true)} />;
 
   return (
     <PanelStyleContext.Provider value={{ btn, card, inputStyle }}>
@@ -472,7 +518,10 @@ function PanelShell() {
         <div style={{ background: 'var(--ink)' }}>
           <div style={{ maxWidth: 1140, margin: '0 auto', padding: '0 24px', height: 64, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <span className="display" style={{ fontStyle: 'italic', color: 'var(--paper)' }}>Valentina De la Fuente</span>
-            <button onClick={handleLogout} style={{ background: 'none', border: 'none', color: 'rgba(251,247,242,0.6)', fontSize: 14, cursor: 'pointer' }}>Cerrar sesión</button>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 18 }}>
+              <button onClick={volverAlSitio} style={{ background: 'none', border: 'none', color: 'rgba(251,247,242,0.6)', fontSize: 13, cursor: 'pointer' }}>← Ver sitio</button>
+              <button onClick={handleLogout} style={{ background: 'none', border: 'none', color: 'rgba(251,247,242,0.6)', fontSize: 14, cursor: 'pointer' }}>Cerrar sesión</button>
+            </span>
           </div>
         </div>
         <div style={{ background: 'var(--ink)', borderTop: '1px solid rgba(255,255,255,0.1)' }}>
@@ -518,17 +567,17 @@ function TabCEO() {
   useEffect(() => {
     (async () => {
       const [leads, gastos, biblioteca] = await Promise.all([
-        api('/api/leads'),
-        api('/api/gastos'),
-        api('/api/biblioteca'),
+        vvFetch('leads?select=id,estado'),
+        vvFetch('gastos?select=fecha,monto'),
+        vvFetch('documentos?select=estado'),
       ]);
       const inicioMes = new Date().toISOString().slice(0, 7);
-      const gastosMes = gastos.gastos.filter((g) => g.fecha.slice(0, 7) === inicioMes).reduce((a, g) => a + Number(g.monto), 0);
+      const gastosMes = gastos.filter((g) => g.fecha.slice(0, 7) === inicioMes).reduce((a, g) => a + Number(g.monto), 0);
       setStats({
-        total: leads.leads.length,
-        nuevos: leads.leads.filter((l) => l.estado === 'nuevo').length,
+        total: leads.length,
+        nuevos: leads.filter((l) => l.estado === 'nuevo').length,
         gastosMes,
-        documentos: biblioteca.documentos.filter((d) => d.estado === 'listo').length,
+        documentos: biblioteca.filter((d) => d.estado === 'listo').length,
       });
     })();
   }, []);
@@ -563,8 +612,8 @@ function TabComercial() {
 
   const fetchLeads = useCallback(async () => {
     setLoading(true);
-    const data = await api('/api/leads');
-    setLeads(data.leads);
+    const data = await vvFetch('leads?select=*&order=created_at.desc&limit=500');
+    setLeads(data);
     setLoading(false);
   }, []);
 
@@ -572,7 +621,7 @@ function TabComercial() {
 
   async function cambiarEstado(id, estado) {
     setLeads((prev) => prev.map((l) => (l.id === id ? { ...l, estado } : l)));
-    await api('/api/leads', { method: 'PATCH', body: { id, estado } });
+    await vvFetch(`leads?id=eq.${id}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ estado, updated_at: new Date().toISOString() }) });
   }
 
   async function enviarPresentacion(id) {
@@ -632,7 +681,7 @@ function TabMarketing() {
   const [loading, setLoading] = useState(false);
   const { btn, inputStyle } = React.useContext(PanelStyleContext);
 
-  const fetchItems = useCallback(async () => setItems((await api('/api/generar-contenido')).items), []);
+  const fetchItems = useCallback(async () => setItems(await vvFetch('content_items?select=*&order=created_at.desc&limit=50')), []);
   useEffect(() => { fetchItems(); }, [fetchItems]);
 
   async function generar() {
@@ -702,7 +751,7 @@ function TabProspeccion() {
   const [error, setError] = useState('');
   const { btn, card, inputStyle } = React.useContext(PanelStyleContext);
 
-  const fetchProspectos = useCallback(async () => setProspectos((await api('/api/prospectos')).prospectos), []);
+  const fetchProspectos = useCallback(async () => setProspectos(await vvFetch('prospectos?select=*&order=created_at.desc&limit=300')), []);
   useEffect(() => { fetchProspectos(); }, [fetchProspectos]);
 
   function toggle(arr, setArr, v) { setArr(arr.includes(v) ? arr.filter((x) => x !== v) : [...arr, v]); }
@@ -721,7 +770,7 @@ function TabProspeccion() {
 
   async function cambiarEstado(id, estado) {
     setProspectos((prev) => prev.map((p) => (p.id === id ? { ...p, estado } : p)));
-    await api('/api/prospectos', { method: 'PATCH', body: { id, estado } });
+    await vvFetch(`prospectos?id=eq.${id}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ estado }) });
   }
 
   return (
@@ -814,7 +863,18 @@ function MailsNuevoEnvio() {
   const [resultado, setResultado] = useState(null);
   const { btn, inputStyle } = React.useContext(PanelStyleContext);
 
-  useEffect(() => { api('/api/mails-contactos').then((d) => setContactos(d.contactos)); }, []);
+  useEffect(() => {
+    (async () => {
+      const [leads, prospectos] = await Promise.all([
+        vvFetch('leads?select=id,nombre,email&email=not.is.null'),
+        vvFetch('prospectos?select=id,nombre,email&email=not.is.null'),
+      ]);
+      setContactos([
+        ...leads.map((l) => ({ id: `lead:${l.id}`, nombre: l.nombre, email: l.email, tipo: 'lead' })),
+        ...prospectos.map((p) => ({ id: `prospecto:${p.id}`, nombre: p.nombre, email: p.email, tipo: 'prospecto' })),
+      ]);
+    })();
+  }, []);
 
   async function enviar() {
     setEnviando(true);
@@ -868,7 +928,20 @@ function MailsNuevoEnvio() {
 
 function MailsHistorial() {
   const [data, setData] = useState(null);
-  useEffect(() => { api('/api/mails-historial').then(setData); }, []);
+  useEffect(() => {
+    (async () => {
+      const log = await vvFetch('email_log?select=*&order=created_at.desc&limit=100');
+      setData({
+        log,
+        stats: {
+          enviados: log.filter((l) => l.estado === 'enviado').length,
+          errores: log.filter((l) => l.estado === 'error').length,
+          tasa_apertura: 0,
+          tasa_click: 0,
+        },
+      });
+    })();
+  }, []);
   if (!data) return <p style={{ color: 'var(--ink-soft)', fontSize: 14 }}>Cargando…</p>;
   const Stat = ({ label, value }) => (
     <div style={{ border: '1px solid var(--line)', padding: 16 }}>
@@ -910,7 +983,11 @@ function TabWhatsapp() {
   const [activa, setActiva] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => { api('/api/whatsapp').then((d) => { setConversaciones(d.conversaciones || []); setLoading(false); }); }, []);
+  useEffect(() => {
+    vvFetch('whatsapp_conversations?select=*&order=ultimo_mensaje_at.desc')
+      .then((d) => { setConversaciones(d || []); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, []);
 
   return (
     <div>
@@ -996,7 +1073,7 @@ function TabBiblioteca() {
   const [error, setError] = useState('');
   const { btn, inputStyle } = React.useContext(PanelStyleContext);
 
-  const fetchDocs = useCallback(async () => { setLoadingList(true); setDocumentos((await api('/api/biblioteca')).documentos); setLoadingList(false); }, []);
+  const fetchDocs = useCallback(async () => { setLoadingList(true); setDocumentos(await vvFetch('documentos?select=*&order=created_at.desc')); setLoadingList(false); }, []);
   useEffect(() => { fetchDocs(); }, [fetchDocs]);
 
   async function subir(e) {
@@ -1054,12 +1131,12 @@ function TabGastos() {
   const [saving, setSaving] = useState(false);
   const { btn, inputStyle } = React.useContext(PanelStyleContext);
 
-  const fetchGastos = useCallback(async () => setGastos((await api('/api/gastos')).gastos), []);
+  const fetchGastos = useCallback(async () => setGastos(await vvFetch('gastos?select=*&order=fecha.desc&limit=200')), []);
   useEffect(() => { fetchGastos(); }, [fetchGastos]);
 
   async function guardar() {
     setSaving(true);
-    await api('/api/gastos', { method: 'POST', body: { ...form, monto: Number(form.monto) } });
+    await vvFetch('gastos', { method: 'POST', body: JSON.stringify({ ...form, monto: Number(form.monto) }) });
     setForm((f) => ({ ...f, descripcion: '', monto: '' }));
     await fetchGastos();
     setSaving(false);
@@ -1224,39 +1301,53 @@ function ColorField({ label, value, onChange }) {
 }
 
 // ---------------------------------------------------------------------
-// Router raíz
+// Selector de arriba de todo: Sitio | Centro de Operaciones (por hash,
+// nunca cambia de URL de verdad — igual que V+V con sus marcas)
 // ---------------------------------------------------------------------
-function App() {
-  const [path, setPath] = useState(window.location.pathname);
-  const [authChecked, setAuthChecked] = useState(false);
-  const [authed, setAuthed] = useState(false);
-
-  useEffect(() => {
-    const onPop = () => setPath(window.location.pathname);
-    window.addEventListener('popstate', onPop);
-    return () => window.removeEventListener('popstate', onPop);
-  }, []);
-
-  useEffect(() => {
-    if (path.startsWith('/panel') && path !== '/panel/login') {
-      const t = tokenGuardado();
-      setAuthed(Boolean(t));
-      setAuthChecked(true);
-      if (!t) navigate('/panel/login');
-    } else {
-      setAuthChecked(true);
-    }
-  }, [path]);
-
-  if (path === '/panel/login') return <PanelLogin />;
-  if (path.startsWith('/panel')) {
-    if (!authChecked) return null;
-    return authed ? <PanelShell /> : null;
-  }
-  return <Landing />;
+function SelectorTop({ activo, onCambiar }) {
+  return (
+    <div style={{ position: 'sticky', top: 0, zIndex: 100, background: '#171217', padding: '9px 14px', display: 'flex', gap: 6, overflowX: 'auto' }}>
+      <button onClick={() => onCambiar('sitio')} style={{
+        border: 'none', borderRadius: 20, padding: '7px 14px', fontSize: 11.5, fontWeight: 700, whiteSpace: 'nowrap', cursor: 'pointer',
+        background: activo === 'sitio' ? 'var(--acento)' : 'transparent', color: activo === 'sitio' ? '#fff' : '#C9C1BE',
+      }}>Valentina De la Fuente</button>
+      <button onClick={() => onCambiar('operaciones')} style={{
+        border: 'none', borderRadius: 20, padding: '7px 14px', fontSize: 11.5, fontWeight: 700, whiteSpace: 'nowrap', cursor: 'pointer',
+        background: activo === 'operaciones' ? 'var(--acento)' : 'transparent', color: activo === 'operaciones' ? '#fff' : '#C9C1BE',
+      }}>Centro de Operaciones</button>
+    </div>
+  );
 }
 
-ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+const MAPA_HASH = { '': 'sitio', '#operaciones': 'operaciones' };
+
+function Sitio() {
+  const [vista, setVista] = useState(MAPA_HASH[window.location.hash] || 'sitio');
+
+  function ir(v) {
+    setVista(v);
+    window.location.hash = v === 'operaciones' ? '#operaciones' : '';
+  }
+
+  useEffect(() => {
+    const f = () => {
+      const h = window.location.hash;
+      if (Object.prototype.hasOwnProperty.call(MAPA_HASH, h)) setVista(MAPA_HASH[h]);
+    };
+    window.addEventListener('hashchange', f);
+    return () => window.removeEventListener('hashchange', f);
+  }, []);
+
+  return (
+    <div>
+      <SelectorTop activo={vista} onCambiar={ir} />
+      {vista === 'sitio' && <Landing />}
+      {vista === 'operaciones' && <CentroOperaciones />}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<Sitio />);
 </script>
 </body>
 </html>

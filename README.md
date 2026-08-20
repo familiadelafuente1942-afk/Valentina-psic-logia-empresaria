@@ -29,6 +29,7 @@ una acción puntual, se edita el archivo correspondiente en /api.
    - supabase/migrations/004_configuracion_sitio.sql
    - supabase/migrations/005_prospeccion_y_diseno.sql
    - supabase/migrations/006_login_real.sql
+   - supabase/migrations/007_acceso_directo_navegador.sql
 4. Storage -> New bucket -> creá TRES buckets:
    - biblioteca (privado) - PDFs de estudio
    - perfil (privado) - CV
@@ -68,25 +69,35 @@ una acción puntual, se edita el archivo correspondiente en /api.
 
 ## 3. El Centro de Operaciones
 
-Entrá a /panel/login con el mail y la contraseña que le creaste a
-Valentina en Supabase (paso 1.5) — login real, con recuperación de
-clave incluida ("¿Olvidaste tu contraseña?"). Mismas 10 pestañas, mismo
-patrón visual que el de V+V:
+Es la MISMA app, la MISMA URL — no hay una dirección separada para el
+panel. Arriba de todo hay dos pestañas fijas: **"Valentina De la Fuente"**
+(el sitio público) y **"Centro de Operaciones"** (el panel). Tocás una y
+cambia la vista ahí mismo, sin recargar nada — igual que en V+V.
 
-- CEO -> leads.js, gastos.js, biblioteca.js (resumen)
-- Comercial -> leads.js (listar/cambiar estado/enviar presentación)
-- Marketing -> generar-contenido.js
-- Prospección -> prospectos.js (busca con IA + web search)
-- Mails -> mails-contactos.js, enviar-campana.js, mails-historial.js
-- WhatsApp IA -> whatsapp.js, webhook-whatsapp.js (pendiente credenciales)
-- Asistente IA -> asistente.js (la Guía, con tool use)
-- Biblioteca -> biblioteca.js (sube y procesa PDFs)
-- Gastos -> gastos.js
-- Diseño -> operaciones.js (logo, foto, colores, textos, perfil + CV)
+Al tocar "Centro de Operaciones" te pide el mail y la contraseña que le
+creaste a Valentina en Supabase (paso 1.5) — login real, con recuperación
+de clave incluida ("¿Olvidaste tu contraseña?"). Adentro, las mismas 10
+pestañas de siempre: CEO, Comercial, Marketing, Prospección, Mails,
+WhatsApp IA, Asistente IA, Biblioteca, Gastos, Diseño.
 
-La landing (/) lee su configuración pública de config-publica.js -
-sin login, para que cualquier visitante la vea. El resto de las funciones
-exige la cookie de sesión del panel.
+La mayoría de las pestañas (CEO, Comercial, Marketing, Prospección,
+Mails, WhatsApp IA, Biblioteca, Gastos) leen y escriben **directo contra
+Supabase** desde el navegador — sin pasar por ninguna función propia,
+igual que hace V+V. Las funciones de `/api` quedaron solo para lo que
+necesita una clave secreta:
+
+- `generar-contenido.js` (IA — Marketing)
+- `prospectos.js` (POST — búsqueda con IA en Prospección)
+- `asistente.js` (la Guía)
+- `biblioteca.js` (subir/procesar/borrar PDFs)
+- `enviar-campana.js`, `leads.js` (POST) (mandar mails, necesitan Resend)
+- `operaciones.js` (Diseño — guarda logo/foto/colores/perfil)
+- `notificar-lead.js` (mail de confirmación cuando llega un lead nuevo)
+- `webhook-whatsapp.js`, `webhook-resend.js`, `agente-diario.js`, `cron-prospeccion.js`
+
+El formulario de contacto de la landing también guarda el lead **directo**
+en Supabase (con la anon key, que es pública a propósito) y solo llama a
+`notificar-lead.js` después, para mandar el mail de confirmación.
 
 ## 4. Subida de archivos (PDFs, foto, logo, CV)
 
