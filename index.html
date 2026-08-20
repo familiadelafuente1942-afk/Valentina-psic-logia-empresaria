@@ -43,8 +43,8 @@ const { useState, useEffect, useCallback, useRef } = React;
 // Completá estos dos valores después de crear el proyecto en Supabase
 // (Project Settings → API → Project URL / anon public key).
 // ---------------------------------------------------------------------
-const SUPA_URL = ""; // ej: "https://xxxxxxxx.supabase.co"
-const SUPA_ANON_KEY = ""; // la "anon public key" de Supabase (NO la service_role)
+const SUPA_URL = "https://pbxdqvueuiwhsanhbcuy.supabase.co";
+const SUPA_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBieGRxdnVldWl3aHNhbmhiY3V5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODcyNDk3NjIsImV4cCI6MjEwMjgyNTc2Mn0.kAelzJbQ-5gCw7kkDkxYFjMOllpe8eOp8bws06NMFRQ";
 
 // --- sesión con renovación automática ---
 function tokenGuardado() { try { return localStorage.getItem('vv_token'); } catch { return null; } }
