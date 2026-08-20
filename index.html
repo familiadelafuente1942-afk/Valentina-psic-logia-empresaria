@@ -113,8 +113,10 @@ async function api(path, opts = {}, _reintentado) {
     const renovado = await renovarSesion();
     if (renovado) return api(path, opts, true);
   }
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw Object.assign(new Error(data.error || 'Error'), { status: res.status, data });
+  const texto = await res.text();
+  let data = {};
+  try { data = texto ? JSON.parse(texto) : {}; } catch {}
+  if (!res.ok) throw Object.assign(new Error(data.error || (texto ? texto.slice(0, 300) : `Error ${res.status}`)), { status: res.status, data });
   return data;
 }
 
